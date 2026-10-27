@@ -15,10 +15,9 @@ import model_provider
 import route
 
 
-def codex_scores(model="gpt-6-astra", effort="high", model_score=0.9, effort_score=0.9):
-    probabilities = {"model_" + name: 0.1 for name in route.TARGETS["codex"]["models"]}
-    probabilities.update({"effort_" + name: 0.1 for name in route.EFFORTS})
-    probabilities["model_" + model] = model_score
+def codex_scores(tier="judgment", effort="high", tier_score=0.9, effort_score=0.9):
+    probabilities = {item["id"]: 0.1 for item in route.BEHAVIORS}
+    probabilities["tier_" + tier] = tier_score
     probabilities["effort_" + effort] = effort_score
     return probabilities
 
@@ -38,32 +37,31 @@ class CodexRouteTests(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             status = route.main(["--target", "codex", "--json", "Synthetic task"])
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(output.getvalue()), {"model": "gpt-6.1-sol", "effort": "xhigh"})
+        self.assertEqual(json.loads(output.getvalue()), {"model": "gpt-6.1-sol", "effort": "xhigh", "tier": "hard"})
         self.assertEqual(len(output.getvalue().splitlines()), 1)
 
-    def test_codex_selection_scores_only_codex_models_and_logs_target(self):
-        for selected in ("gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"):
-            with self.subTest(model=selected):
-                with patch("route.model_provider.scores", return_value=(codex_scores(selected), {})) as score:
+    def test_each_tier_maps_to_its_codex_model_and_logs_target(self):
+        for tier, selected in (("judgment", "gpt-6-astra"), ("hard", "gpt-6.1-sol"),
+                               ("routine", "gpt-6.1-terra"), ("trivial", "gpt-6-luna")):
+            with self.subTest(tier=tier):
+                with patch("route.model_provider.scores", return_value=(codex_scores(tier), {})) as score:
                     model, effort, entry = route.route("Synthetic task", "/workspace", "codex", "codex")
-                self.assertEqual((model, effort), (selected, "high"))
+                self.assertEqual((model, effort, entry["tier"]), (selected, "high", tier))
                 self.assertEqual(entry["target"], "codex")
                 self.assertEqual(entry["kind"], "codex")
                 self.assertEqual(entry["floored"], [])
-                text, behaviors = score.call_args.args
-                self.assertEqual(text, "Synthetic task")
-                self.assertEqual({item["id"] for item in behaviors}, set(codex_scores()))
+                score.assert_called_once_with("Synthetic task", route.BEHAVIORS)
                 self.assertEqual(json.loads(self.log.read_text().splitlines()[-1]), entry)
 
     def test_codex_floor_applies_independently_at_the_boundary(self):
-        cases = [(0.2, 0.9, ("gpt-6.1-sol", "high"), ["model"]),
+        cases = [(0.2, 0.9, ("gpt-6.1-sol", "high"), ["tier"]),
                  (0.9, 0.2, ("gpt-6-astra", "xhigh"), ["effort"]),
-                 (0.2, 0.2, ("gpt-6.1-sol", "xhigh"), ["model", "effort"]),
+                 (0.2, 0.2, ("gpt-6.1-sol", "xhigh"), ["tier", "effort"]),
                  (0.3, 0.3, ("gpt-6-astra", "high"), [])]
-        for model_score, effort_score, expected, floored in cases:
-            with self.subTest(model_score=model_score, effort_score=effort_score):
+        for tier_score, effort_score, expected, floored in cases:
+            with self.subTest(tier_score=tier_score, effort_score=effort_score):
                 with patch("route.model_provider.scores", return_value=(
-                        codex_scores(model_score=model_score, effort_score=effort_score), {})):
+                        codex_scores(tier_score=tier_score, effort_score=effort_score), {})):
                     model, effort, entry = route.route("Synthetic task", "", "codex", "codex")
                 self.assertEqual((model, effort), expected)
                 self.assertEqual(entry["floored"], floored)
@@ -77,13 +75,13 @@ class CodexRouteTests(unittest.TestCase):
         self.assertEqual(entry["attempts"], attempts)
         self.assertEqual(entry["target"], "codex")
 
-    def test_cli_codex_json_contains_only_model_and_effort(self):
+    def test_cli_codex_json_contains_model_effort_and_tier(self):
         output = io.StringIO()
         with patch("route.model_provider.scores", return_value=(codex_scores(), {})), \
                 contextlib.redirect_stdout(output):
-            status = route.main(["--target", "codex", "--json", "Synthetic task"])
+            status = route.main(["--target", "codex", "--json", "--", "- Synthetic task from a bullet list"])
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(output.getvalue()), {"model": "gpt-6-astra", "effort": "high"})
+        self.assertEqual(json.loads(output.getvalue()), {"model": "gpt-6-astra", "effort": "high", "tier": "judgment"})
         self.assertEqual(len(output.getvalue().splitlines()), 1)
 
     def test_cli_claude_human_output_remains_default(self):

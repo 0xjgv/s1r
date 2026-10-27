@@ -3,8 +3,8 @@
 The pick goes on the Agent call's `model` and `effort` fields (Claude Code 2.1.292+); every other
 input, including the agent type, is kept. The route label <model>-<effort> is prefixed to
 `description` so the UI shows it. systemMessage shows routed-<model>-<effort> in the session UI
-only; the model never sees it. Scoring failures get route.FALLBACK; non-Agent calls
-pass through unchanged.
+only; the model never sees it. Scoring failures get the claude target's fallback; non-Agent
+calls pass through unchanged.
 """
 
 import json

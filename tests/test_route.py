@@ -15,9 +15,9 @@ import model_provider
 import route
 
 
-def scores(model="opus", effort="high", model_score=0.9, effort_score=0.9):
+def scores(tier="hard", effort="high", tier_score=0.9, effort_score=0.9):
     probabilities = {item["id"]: 0.1 for item in route.BEHAVIORS}
-    probabilities["model_" + model] = model_score
+    probabilities["tier_" + tier] = tier_score
     probabilities["effort_" + effort] = effort_score
     return probabilities
 
@@ -31,11 +31,21 @@ class RouteTests(unittest.TestCase):
         log.start()
         self.addCleanup(log.stop)
 
-    def test_haiku_is_selected_when_it_scores_highest(self):
-        with patch("route.model_provider.scores", return_value=(scores("haiku", "low"), {})):
-            model, effort, entry = route.route("Synthetic task", "", "manual")
-        self.assertEqual((model, effort), ("haiku", "low"))
-        self.assertEqual(entry["floored"], [])
+    def test_each_tier_maps_to_its_claude_model(self):
+        for tier, expected in (("judgment", "fable"), ("hard", "opus"), ("routine", "sonnet"), ("trivial", "haiku")):
+            with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier, "low"), {})):
+                model, effort, entry = route.route("Synthetic task", "", "manual")
+            self.assertEqual((model, effort, entry["tier"]), (expected, "low", tier))
+            self.assertEqual(entry["floored"], [])
+
+    def test_every_target_scores_the_same_tiers_and_efforts(self):
+        for target in route.TARGETS:
+            with self.subTest(target=target), \
+                    patch("route.model_provider.scores", return_value=(scores(), {})) as score:
+                route.route("Synthetic task", "", "manual", target)
+            score.assert_called_once_with("Synthetic task", route.BEHAVIORS)
+        self.assertEqual({item["id"] for item in route.BEHAVIORS},
+                         {f"tier_{t}" for t in route.TIERS} | {f"effort_{e}" for e in route.EFFORTS})
 
     def test_selection_and_provider_metadata_are_logged(self):
         metadata = {"scoring_provider": "openrouter", "scoring_model": "typesafe/jev-1.13",
@@ -50,13 +60,13 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(json.loads(self.log.read_text()), entry)
 
     def test_floor_applies_independently_to_each_group(self):
-        cases = [(0.2, 0.9, ("sonnet", "high"), ["model"]),
+        cases = [(0.2, 0.9, ("sonnet", "high"), ["tier"]),
                  (0.9, 0.2, ("opus", "xhigh"), ["effort"]),
                  (0.3, 0.3, ("opus", "high"), [])]
-        for model_score, effort_score, expected, floored in cases:
-            with self.subTest(model_score=model_score, effort_score=effort_score):
+        for tier_score, effort_score, expected, floored in cases:
+            with self.subTest(tier_score=tier_score, effort_score=effort_score):
                 with patch("route.model_provider.scores", return_value=(
-                        scores(model_score=model_score, effort_score=effort_score), {})):
+                        scores(tier_score=tier_score, effort_score=effort_score), {})):
                     model, effort, entry = route.route("Synthetic task", "", "agent")
                 self.assertEqual((model, effort), expected)
                 self.assertEqual(entry["floored"], floored)
@@ -67,7 +77,7 @@ class RouteTests(unittest.TestCase):
         failure = model_provider.ScoreError(attempts)
         with patch("route.model_provider.scores", side_effect=failure):
             model, effort, entry = route.route("Synthetic task", "", "agent")
-        self.assertEqual((model, effort), route.FALLBACK)
+        self.assertEqual((model, effort, entry["tier"]), ("sonnet", "xhigh", "routine"))
         self.assertIn("error", entry)
         self.assertEqual(entry["attempts"], attempts)
 
