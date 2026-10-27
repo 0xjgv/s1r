@@ -34,15 +34,36 @@ class RouteTests(unittest.TestCase):
     def test_each_tier_maps_to_its_claude_model(self):
         for tier, expected in (("judgment", "fable"), ("hard", "opus"), ("routine", "sonnet"), ("trivial", "haiku")):
             with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier, "low"), {})):
-                model, effort, entry = route.route("Synthetic task", "", "manual")
-            self.assertEqual((model, effort, entry["tier"]), (expected, "low", tier))
+                model, effort, entry = route.route("Synthetic task", "", "manual", exclude=("codex",))
+            self.assertEqual((model, effort, entry["tier"], entry["harness"]), (expected, "low", tier, "claude"))
             self.assertEqual(entry["floored"], [])
 
-    def test_every_target_scores_the_same_tiers_and_efforts(self):
-        for target in route.TARGETS:
-            with self.subTest(target=target), \
+    def test_without_exclusions_each_tier_takes_its_first_listed_harness(self):
+        for tier, models in route.MODELS.items():
+            harness = next(iter(models))
+            with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier), {})):
+                model, _, entry = route.route("Synthetic task", "", "manual")
+            self.assertEqual((model, entry["harness"], entry["exclude"]), (models[harness], harness, []))
+
+    def test_excluding_an_unknown_or_every_harness_is_refused_before_scoring(self):
+        for exclude in (("claude", "codex"), ("gemini",), "codex"):
+            with self.subTest(exclude=exclude), patch("route.model_provider.scores") as score:
+                with self.assertRaises(ValueError):
+                    route.route("Synthetic task", "", "manual", exclude=exclude)
+                score.assert_not_called()
+
+    def test_cli_refuses_to_exclude_every_harness(self):
+        with patch("route.model_provider.scores") as score, contextlib.redirect_stderr(io.StringIO()), \
+                self.assertRaises(SystemExit) as error:
+            route.main(["--exclude", "claude", "--exclude", "codex", "Synthetic task"])
+        self.assertEqual(error.exception.code, 2)
+        score.assert_not_called()
+
+    def test_every_exclusion_scores_the_same_tiers_and_efforts(self):
+        for exclude in ((), ("codex",), ("claude",)):
+            with self.subTest(exclude=exclude), \
                     patch("route.model_provider.scores", return_value=(scores(), {})) as score:
-                route.route("Synthetic task", "", "manual", target)
+                route.route("Synthetic task", "", "manual", exclude=exclude)
             score.assert_called_once_with("Synthetic task", route.BEHAVIORS)
         self.assertEqual({item["id"] for item in route.BEHAVIORS},
                          {f"tier_{t}" for t in route.TIERS} | {f"effort_{e}" for e in route.EFFORTS})
@@ -103,7 +124,7 @@ class HookTests(unittest.TestCase):
                 call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": agent_type}
                 with patch("agent_hook.route.route", return_value=("opus", "high", {})) as pick:
                     output = json.loads(self.invoke({"tool_name": "Agent", "cwd": "/workspace", "tool_input": call}))
-                pick.assert_called_once_with("Synthetic task", "/workspace", "agent")
+                pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",))
                 self.assertEqual(output, {"systemMessage": "routed-opus-high", "hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "updatedInput": {
                         **call, "model": "opus", "effort": "high", "description": "opus-high · Example"}}})

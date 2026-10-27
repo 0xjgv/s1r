@@ -15,7 +15,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if not args.prompt.strip():
         parser.error("prompt must not be empty")
-    model, effort, entry = route.route(args.prompt, os.getcwd(), "codex", "codex")
+    model, effort, entry = route.route(args.prompt, os.getcwd(), "codex", exclude=("claude",))
     note = "; scoring failed, using fallback" if "error" in entry else ""
     print(f"Routing to {model} ({effort}{note})", file=sys.stderr)
     options = args.codex_args

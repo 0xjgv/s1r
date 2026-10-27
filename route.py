@@ -1,11 +1,12 @@
 """Use a System One scorer to pick the model and effort for a task or subagent.
 
     python3 route.py "<prompt>"   print the pick for one prompt and log it
-    python3 route.py --target codex --json -- "<prompt>"   print a Codex model, effort, and tier
+    python3 route.py --exclude claude --json -- "<prompt>"   print a Codex model, effort, tier, and harness
 
 One scoring call evaluates every tier and effort option; each group takes the highest probability.
-The target's table maps the tier to a model. Scoring failures and winners under FLOOR use the
-target's fallback. Standard library only; Python 3.9.
+MODELS maps the tier to the first listed model whose harness the caller did not exclude. Scoring
+failures and winners under FLOOR use the first remaining harness's fallback. Standard library only;
+Python 3.9.
 """
 
 from __future__ import annotations
@@ -22,18 +23,21 @@ import model_provider
 ROOT = Path(__file__).resolve().parent
 LOG = ROOT / "artifacts" / "beta_log.jsonl"
 FLOOR = 0.3  # a winning p_present under this means no option fit
-TIERS = {  # What makes the task hard; each target maps a tier to a model.
+TIERS = {  # What makes the task hard; MODELS maps a tier to a model.
     "judgment": "The main difficulty of the task request is judgment, not execution: it asks to decide, compare options, weigh trade-offs, or work out what is really wanted, and following instructions alone would not produce the right answer.",
     "hard": "The task request is hard engineering with an unknown cause or solution: it spans several components, needs deep investigation, and a competent engineer could easily get it wrong.",
     "routine": "The task request is standard engineering with a known approach: the steps follow from the request, and a competent engineer would finish it correctly on the first attempt, even if it takes several steps.",
     "trivial": "The task request is trivial: a single lookup, a one-line edit, or a short factual answer that takes one or two steps and no judgment.",
 }
-TARGETS = {  # Fallback: the tier and effort used when scoring fails or no option fits.
-    "claude": {"models": {"judgment": "fable", "hard": "opus", "routine": "sonnet", "trivial": "haiku"},
-               "fallback": ("routine", "xhigh")},
-    "codex": {"models": {"judgment": "gpt-6-astra", "hard": "gpt-6.1-sol", "routine": "gpt-6.1-terra",
-                         "trivial": "gpt-6-luna"},
-              "fallback": ("hard", "xhigh")},
+MODELS = {  # Each tier's model per harness; the first harness not excluded wins.
+    "judgment": {"claude": "fable", "codex": "gpt-6-astra"},
+    "hard": {"claude": "opus", "codex": "gpt-6.1-sol"},
+    "routine": {"claude": "sonnet", "codex": "gpt-6.1-terra"},
+    "trivial": {"claude": "haiku", "codex": "gpt-6-luna"},
+}
+FALLBACKS = {  # Per harness, in order: the tier and effort used when scoring fails or no option fits.
+    "claude": ("routine", "xhigh"),
+    "codex": ("hard", "xhigh"),
 }
 EFFORTS = {
     "xhigh": "The task request can only be done right by hunting hidden edge cases and verifying thoroughly; a missed case would be costly.",
@@ -47,11 +51,14 @@ BEHAVIORS = ([{"id": f"tier_{k}", "definition": v} for k, v in TIERS.items()]
              + [{"id": f"effort_{k}", "definition": v} for k, v in EFFORTS.items()])
 
 
-def route(text: str, cwd: str, kind: str, target: str = "claude") -> tuple[str, str, dict]:
-    """Pick and log one prompt, using the target's fallback if scoring fails."""
+def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = ()) -> tuple[str, str, dict]:
+    """Pick and log one prompt among the harnesses not excluded, falling back if scoring fails."""
+    allowed = [harness for harness in FALLBACKS if harness not in exclude]
+    if set(exclude) - set(FALLBACKS) or not allowed:
+        raise ValueError(f"exclude must name harnesses from {list(FALLBACKS)} and leave one; got {list(exclude)}")
     entry: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "kind": kind,
-                   "cwd": cwd, "text": text, "target": target}
-    tier, effort = TARGETS[target]["fallback"]
+                   "cwd": cwd, "text": text, "exclude": list(exclude)}
+    tier, effort = FALLBACKS[allowed[0]]
     try:
         p, metadata = model_provider.scores(text, BEHAVIORS)
         entry.update(metadata)
@@ -66,8 +73,9 @@ def route(text: str, cwd: str, kind: str, target: str = "claude") -> tuple[str, 
         entry["error"] = type(err).__name__
         if isinstance(err, model_provider.ScoreError):
             entry["attempts"] = err.attempts
-    model = TARGETS[target]["models"][tier]
-    entry.update(tier=tier, model=model, effort=effort)
+    harness = next(h for h in MODELS[tier] if h in allowed)
+    model = MODELS[tier][harness]
+    entry.update(tier=tier, harness=harness, model=model, effort=effort)
     try:
         LOG.parent.mkdir(exist_ok=True)
         with LOG.open("a") as f:
@@ -79,15 +87,19 @@ def route(text: str, cwd: str, kind: str, target: str = "claude") -> tuple[str, 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=TARGETS, default="claude", help="Execution target (default: claude)")
-    parser.add_argument("--json", action="store_true", help="Print a model/effort/tier JSON object")
+    parser.add_argument("--exclude", action="append", default=[], choices=FALLBACKS,
+                        help="Skip a harness's models; repeat to skip several (default: none)")
+    parser.add_argument("--json", action="store_true", help="Print a model/effort/tier/harness JSON object")
     parser.add_argument("prompt", help="Task prompt")
     args = parser.parse_args(argv)
     if not args.prompt.strip():
         parser.error("prompt must not be empty")
-    model, effort, entry = route(args.prompt, os.getcwd(), "manual", args.target)
+    try:
+        model, effort, entry = route(args.prompt, os.getcwd(), "manual", tuple(args.exclude))
+    except ValueError as err:
+        parser.error(str(err))
     if args.json:
-        print(json.dumps({"model": model, "effort": effort, "tier": entry["tier"]}))
+        print(json.dumps({"model": model, "effort": effort, "tier": entry["tier"], "harness": entry["harness"]}))
     else:
         note = "Scoring failed" if "error" in entry else ",".join(entry["floored"])
         print(f"{model} {effort}" + (f"  ({note})" if note else ""))

@@ -77,10 +77,11 @@ the chat-completions API. See [Respan's models](https://www.respan.ai/docs/docum
 
 ## How routing works
 
-The scorer picks a tier, which says what makes the task hard. Each execution
-target maps tiers to its own models. The target is independent of the scoring provider:
+The scorer picks a tier, which says what makes the task hard. Each tier has one model
+per harness. A caller excludes the harnesses it cannot run, and the first remaining
+harness in the tier's row wins. The harness is independent of the scoring provider:
 
-| Tier | `claude` (default) | `codex` |
+| Tier | `claude` | `codex` |
 |---|---|---|
 | `judgment`: deciding, comparing, weighing trade-offs | `fable` | `gpt-6-astra` |
 | `hard`: engineering with an unknown cause or solution | `opus` | `gpt-6.1-sol` |
@@ -88,21 +89,25 @@ target maps tiers to its own models. The target is independent of the scoring pr
 | `trivial`: a lookup, a one-line edit, a short answer | `haiku` | `gpt-6-luna` |
 | Fallback tier/effort | `routine` / `xhigh` | `hard` / `xhigh` |
 
-Tier definitions and the target tables live in `route.py` (`TIERS`, `TARGETS`). A
-model rename or a new target changes only a table. These are initial routing rules,
-not validated rankings; Terra's place under `routine` follows the Codex model cache's
-description of its predecessor, gpt-5.6-terra, as a "balanced model for straightforward work".
-Both targets use `low`, `medium`, `high`, and `xhigh`; the listed Codex models
+The Claude hook excludes `codex`, and `codex_run.py` excludes `claude`. With no
+exclusion, every tier picks Claude, because `claude` comes first in each row. Tier
+definitions, the tier table, and the fallbacks live in `route.py` (`TIERS`, `MODELS`,
+`FALLBACKS`). A model rename, a new harness, or a reordered row changes only the tables.
+These are initial routing rules, not validated rankings; Terra's place under `routine`
+follows the Codex model cache's description of its predecessor, gpt-5.6-terra, as a
+"balanced model for straightforward work".
+Both harnesses use `low`, `medium`, `high`, and `xhigh`; the listed Codex models
 support all four. Account access may differ.
 
 1. Score the definitions in `route.py`: four tiers and four efforts (`xhigh`, `high`,
-   `medium`, `low`), the same eight definitions for every target. Respan returns
+   `medium`, `low`), the same eight definitions for every caller. Respan returns
    `p_present`; TypeSafe and OpenRouter return one `noul` probability per definition.
-2. Take the highest score in each group, then map the tier to the target's model. A
-   winner below `FLOOR` (`0.3`) uses that group's target-specific default. Low scores
-   do not trigger a provider retry.
+2. Take the highest score in each group, then map the tier to the first model whose
+   harness is not excluded. A winner below `FLOOR` (`0.3`) uses that group's default from
+   the first remaining harness's fallback. Low scores do not trigger a provider retry.
 3. Missing credentials, request errors, or malformed scores trigger direct TypeSafe
-   Jev, then OpenRouter Jev. If all attempts fail, use the target's fallback pair.
+   Jev, then OpenRouter Jev. If all attempts fail, use the first remaining harness's
+   fallback pair.
    Duplicate provider/model pairs are attempted only once, including when a fallback
    is selected as the primary.
 
@@ -160,12 +165,13 @@ The function preserves normal Claude Code permission checks. See the
 Select a Codex model and effort without launching it:
 
 ```sh
-python3 route.py --target codex --json -- "Explain what a Python list is"
-# Example: {"model": "gpt-6-luna", "effort": "low", "tier": "trivial"}
+python3 route.py --exclude claude --json -- "Explain what a Python list is"
+# Example: {"model": "gpt-6-luna", "effort": "low", "tier": "trivial", "harness": "codex"}
 ```
 
-`--json` emits one model/effort/tier object, including when scoring fails and the
-target's fallback is used. It also works with `--target claude`. Put `--` before the
+`--json` emits one model/effort/tier/harness object, including when scoring fails and
+the fallback is used. `--exclude codex` picks Claude models instead. Excluding every harness
+is an error. Put `--` before the
 prompt when it may start with `-`, as a task file's bullet list does.
 
 Launch one routed Codex task:
@@ -221,7 +227,7 @@ printf '%s\n' '{"tool_name":"Agent","tool_input":{"prompt":"Explain what a Pytho
 tail -n 1 "$EFFORT_ROUTER_DIR/artifacts/beta_log.jsonl"
 ```
 
-Each routing record includes the prompt, working directory, execution target, selected tier/model/effort,
+Each routing record includes the prompt, working directory, excluded harnesses, selected tier/harness/model/effort,
 scores, and provider attempts with timing and error categories. Successful scoring
 also records `scoring_provider` and `scoring_model`. Logs stay in the repository's
 ignored `artifacts/beta_log.jsonl`; logging failure does not discard a decision.
@@ -234,7 +240,7 @@ credentials and logs out of commits and use synthetic prompts for integration te
 | File | Purpose |
 |---|---|
 | `model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
-| `route.py` | Tier and effort definitions, per-target tier tables, selection, and logs |
+| `route.py` | Tier and effort definitions, the tier-to-model table, fallbacks, selection, and logs |
 | `agent_hook.py` | Claude Code `PreToolUse` JSON interface |
 | `codex_run.py` | Launch a whole Codex task with the selected model and effort |
 | `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py` | Offline provider, routing, hook, and launcher regression tests |

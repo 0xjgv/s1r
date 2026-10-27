@@ -35,9 +35,10 @@ class CodexRouteTests(unittest.TestCase):
         output = io.StringIO()
         with patch("route.model_provider.scores", side_effect=model_provider.ScoreError([])), \
                 contextlib.redirect_stdout(output):
-            status = route.main(["--target", "codex", "--json", "Synthetic task"])
+            status = route.main(["--exclude", "claude", "--json", "Synthetic task"])
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(output.getvalue()), {"model": "gpt-6.1-sol", "effort": "xhigh", "tier": "hard"})
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"model": "gpt-6.1-sol", "effort": "xhigh", "tier": "hard", "harness": "codex"})
         self.assertEqual(len(output.getvalue().splitlines()), 1)
 
     def test_each_tier_maps_to_its_codex_model_and_logs_target(self):
@@ -45,9 +46,9 @@ class CodexRouteTests(unittest.TestCase):
                                ("routine", "gpt-6.1-terra"), ("trivial", "gpt-6-luna")):
             with self.subTest(tier=tier):
                 with patch("route.model_provider.scores", return_value=(codex_scores(tier), {})) as score:
-                    model, effort, entry = route.route("Synthetic task", "/workspace", "codex", "codex")
+                    model, effort, entry = route.route("Synthetic task", "/workspace", "codex", exclude=("claude",))
                 self.assertEqual((model, effort, entry["tier"]), (selected, "high", tier))
-                self.assertEqual(entry["target"], "codex")
+                self.assertEqual((entry["harness"], entry["exclude"]), ("codex", ["claude"]))
                 self.assertEqual(entry["kind"], "codex")
                 self.assertEqual(entry["floored"], [])
                 score.assert_called_once_with("Synthetic task", route.BEHAVIORS)
@@ -62,26 +63,27 @@ class CodexRouteTests(unittest.TestCase):
             with self.subTest(tier_score=tier_score, effort_score=effort_score):
                 with patch("route.model_provider.scores", return_value=(
                         codex_scores(tier_score=tier_score, effort_score=effort_score), {})):
-                    model, effort, entry = route.route("Synthetic task", "", "codex", "codex")
+                    model, effort, entry = route.route("Synthetic task", "", "codex", exclude=("claude",))
                 self.assertEqual((model, effort), expected)
                 self.assertEqual(entry["floored"], floored)
 
     def test_codex_provider_failure_uses_codex_fallback(self):
         attempts = [{"provider": "respan", "error": "TimeoutError"}]
         with patch("route.model_provider.scores", side_effect=model_provider.ScoreError(attempts)):
-            model, effort, entry = route.route("Synthetic task", "", "codex", "codex")
+            model, effort, entry = route.route("Synthetic task", "", "codex", exclude=("claude",))
         self.assertEqual((model, effort), ("gpt-6.1-sol", "xhigh"))
         self.assertEqual(entry["error"], "ScoreError")
         self.assertEqual(entry["attempts"], attempts)
-        self.assertEqual(entry["target"], "codex")
+        self.assertEqual(entry["harness"], "codex")
 
     def test_cli_codex_json_contains_model_effort_and_tier(self):
         output = io.StringIO()
         with patch("route.model_provider.scores", return_value=(codex_scores(), {})), \
                 contextlib.redirect_stdout(output):
-            status = route.main(["--target", "codex", "--json", "--", "- Synthetic task from a bullet list"])
+            status = route.main(["--exclude", "claude", "--json", "--", "- Synthetic task from a bullet list"])
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(output.getvalue()), {"model": "gpt-6-astra", "effort": "high", "tier": "judgment"})
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"model": "gpt-6-astra", "effort": "high", "tier": "judgment", "harness": "codex"})
         self.assertEqual(len(output.getvalue().splitlines()), 1)
 
     def test_cli_claude_human_output_remains_default(self):
@@ -105,7 +107,7 @@ class CodexLauncherTests(unittest.TestCase):
                         contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                     status = codex_run.main([prompt] + separator + options)
                 self.assertEqual(status, expected_status)
-                pick.assert_called_once_with(prompt, os.getcwd(), "codex", "codex")
+                pick.assert_called_once_with(prompt, os.getcwd(), "codex", exclude=("claude",))
                 run.assert_called_once_with([
                     "codex", "exec", *options, "--model", "gpt-6-luna", "-c",
                     'model_reasoning_effort="medium"', "--", prompt,
@@ -166,7 +168,7 @@ class CodexLauncherTests(unittest.TestCase):
         self.assertEqual(result.stdout, "child output\n")
         self.assertIn("gpt-6.1-sol", result.stderr)
         self.assertIn("xhigh", result.stderr)
-        self.assertEqual(entry["target"], "codex")
+        self.assertEqual(entry["harness"], "codex")
         self.assertEqual(entry["error"], "ScoreError")
 
 
