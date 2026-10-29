@@ -12,8 +12,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-PRIMARY = ("respan", "span-01-free")
-FALLBACKS = (("typesafe", "jev-1.13.0"), ("openrouter", "typesafe/jev-1.13"))
+PRIMARY = ("typesafe", "jev-1.13.0")  # Beat span-01-free on the live evals in evals/ (2026-10-29).
+FALLBACKS = (("typesafe", "jev-1.13.0"), ("openrouter", "typesafe/jev-1.13"), ("respan", "span-01-free"))
 TIMEOUT_S = 8  # Three attempts leave room within the example hook's 30-second timeout under normal I/O.
 PROVIDERS = {
     "respan": ("https://api.respan.ai/api/v1/scores", "RESPAN_API_KEY"),
@@ -95,7 +95,7 @@ def _score(provider: str, model: str, text: str, behaviors: list[dict]) -> dict[
 
 
 def scores(text: str, behaviors: list[dict]) -> tuple[dict[str, float], dict]:
-    """Try the primary, then Jev directly and via OpenRouter; low scores do not trigger retries."""
+    """Try the primary, then the other fallbacks in order; low scores do not trigger retries."""
     attempts = []
     for provider, model in provider_chain():
         attempt = {"provider": provider, "model": model}

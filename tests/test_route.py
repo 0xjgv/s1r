@@ -32,11 +32,47 @@ class RouteTests(unittest.TestCase):
         self.addCleanup(log.stop)
 
     def test_each_tier_maps_to_its_claude_model(self):
-        for tier, expected in (("judgment", "fable"), ("hard", "opus"), ("routine", "sonnet"), ("trivial", "haiku")):
-            with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier, "low"), {})):
+        cases = (("judgment", "fable"), ("hard", "opus"), ("routine", "sonnet"))
+        self.assertEqual(set(route.MODELS), {tier for tier, _ in cases})
+        self.assertEqual(list(route.EFFORTS), ["xhigh", "high", "medium"])
+        for tier, expected in cases:
+            with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier, "medium"), {})):
                 model, effort, entry = route.route("Synthetic task", "", "manual", exclude=("codex",))
-            self.assertEqual((model, effort, entry["tier"], entry["harness"]), (expected, "low", tier, "claude"))
+            self.assertEqual((model, effort, entry["tier"], entry["harness"]), (expected, "medium", tier, "claude"))
             self.assertEqual(entry["floored"], [])
+
+    def test_each_role_picks_its_model_and_effort_without_scoring(self):
+        cases = {"implement": ("gpt-6.1-sol", "xhigh"), "validate": ("opus", "xhigh"), "plan": ("opus", "xhigh"),
+                 "advise": ("gpt-6-astra", "high"), "research": ("gpt-6.1-terra", "high"),
+                 "commit": ("gpt-6.1-terra", "medium")}
+        self.assertEqual(set(route.ROLES), set(cases))
+        for role, expected in cases.items():
+            with self.subTest(role=role), patch("route.model_provider.scores") as score:
+                model, effort, entry = route.route("Synthetic task", "/workspace", "manual", role=role)
+            score.assert_not_called()
+            self.assertEqual((model, effort, entry["role"]), (*expected, role))
+            self.assertNotIn("tier", entry)
+            self.assertEqual(json.loads(self.log.read_text().splitlines()[-1]), entry)
+
+    def test_every_role_resolves_under_either_exclusion(self):
+        for role, (models, _) in route.ROLES.items():
+            with self.subTest(role=role):
+                self.assertEqual(set(models), set(route.FALLBACKS))
+
+    def test_advise_goes_to_the_harness_the_driver_excludes_not(self):
+        for exclude, expected in ((("claude",), ("gpt-6-astra", "codex")), (("codex",), ("fable", "claude"))):
+            with self.subTest(exclude=exclude):
+                model, _, entry = route.route("Synthetic task", "", "manual", exclude=exclude, role="advise")
+            self.assertEqual((model, entry["harness"]), expected)
+
+    def test_cli_role_json_names_the_role_instead_of_a_tier(self):
+        output = io.StringIO()
+        with patch("route.model_provider.scores") as score, contextlib.redirect_stdout(output):
+            status = route.main(["--role", "plan", "--json", "--", "- Synthetic plan task"])
+        self.assertEqual(status, 0)
+        score.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"model": "opus", "effort": "xhigh", "role": "plan", "harness": "claude"})
 
     def test_without_exclusions_each_tier_takes_its_first_listed_harness(self):
         for tier, models in route.MODELS.items():
@@ -80,10 +116,10 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(entry[key], value)
         self.assertEqual(json.loads(self.log.read_text()), entry)
 
-    def test_floor_applies_independently_to_each_group(self):
+    def test_tier_floor_and_effort_bar_apply_independently(self):
         cases = [(0.2, 0.9, ("sonnet", "high"), ["tier"]),
-                 (0.9, 0.2, ("opus", "xhigh"), ["effort"]),
-                 (0.3, 0.3, ("opus", "high"), [])]
+                 (0.9, 0.4, ("opus", "xhigh"), ["effort"]),
+                 (0.3, 0.5, ("opus", "high"), [])]
         for tier_score, effort_score, expected, floored in cases:
             with self.subTest(tier_score=tier_score, effort_score=effort_score):
                 with patch("route.model_provider.scores", return_value=(
@@ -91,6 +127,16 @@ class RouteTests(unittest.TestCase):
                     model, effort, entry = route.route("Synthetic task", "", "agent")
                 self.assertEqual((model, effort), expected)
                 self.assertEqual(entry["floored"], floored)
+
+    def test_effort_is_the_highest_level_at_the_bar(self):
+        for levels, expected in (({"xhigh": 0.6, "high": 0.9, "medium": 0.9}, "xhigh"),
+                                 ({"xhigh": 0.4, "high": 0.5, "medium": 0.9}, "high"),
+                                 ({"xhigh": 0.1, "high": 0.2, "medium": 0.5}, "medium")):
+            probabilities = scores()
+            probabilities.update({f"effort_{e}": value for e, value in levels.items()})
+            with self.subTest(levels=levels), patch("route.model_provider.scores", return_value=(probabilities, {})):
+                _, effort, entry = route.route("Synthetic task", "", "agent")
+            self.assertEqual((effort, entry["floored"]), (expected, []))
 
     def test_all_provider_failures_keep_spawn_fallback_and_attempts(self):
         attempts = [{"provider": "respan", "model": "span-01-free", "error": "HTTP 503", "elapsed_ms": 1},
@@ -176,7 +222,7 @@ class HookTests(unittest.TestCase):
                 **call, "model": "sonnet", "effort": "xhigh", "description": "sonnet-xhigh · Example"})
             entry = json.loads((root / "artifacts" / "beta_log.jsonl").read_text())
         self.assertIn("ScoreError", entry["error"])
-        self.assertEqual([attempt["provider"] for attempt in entry["attempts"]], ["respan", "typesafe", "openrouter"])
+        self.assertEqual([attempt["provider"] for attempt in entry["attempts"]], ["typesafe", "openrouter", "respan"])
         self.assertTrue(all(attempt["error"] == "ValueError" for attempt in entry["attempts"]))
 
 

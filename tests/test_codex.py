@@ -42,8 +42,7 @@ class CodexRouteTests(unittest.TestCase):
         self.assertEqual(len(output.getvalue().splitlines()), 1)
 
     def test_each_tier_maps_to_its_codex_model_and_logs_target(self):
-        for tier, selected in (("judgment", "gpt-6-astra"), ("hard", "gpt-6.1-sol"),
-                               ("routine", "gpt-6.1-terra"), ("trivial", "gpt-6-luna")):
+        for tier, selected in (("judgment", "gpt-6-astra"), ("hard", "gpt-6.1-sol"), ("routine", "gpt-6.1-terra")):
             with self.subTest(tier=tier):
                 with patch("route.model_provider.scores", return_value=(codex_scores(tier), {})) as score:
                     model, effort, entry = route.route("Synthetic task", "/workspace", "codex", exclude=("claude",))
@@ -58,7 +57,7 @@ class CodexRouteTests(unittest.TestCase):
         cases = [(0.2, 0.9, ("gpt-6.1-sol", "high"), ["tier"]),
                  (0.9, 0.2, ("gpt-6-astra", "xhigh"), ["effort"]),
                  (0.2, 0.2, ("gpt-6.1-sol", "xhigh"), ["tier", "effort"]),
-                 (0.3, 0.3, ("gpt-6-astra", "high"), [])]
+                 (0.3, 0.5, ("gpt-6-astra", "high"), [])]
         for tier_score, effort_score, expected, floored in cases:
             with self.subTest(tier_score=tier_score, effort_score=effort_score):
                 with patch("route.model_provider.scores", return_value=(
@@ -102,18 +101,18 @@ class CodexLauncherTests(unittest.TestCase):
         for separator, child_status, expected_status in (([], 23, 23), (["--"], 23, 23), ([], -15, 143)):
             with self.subTest(separator=separator, child_status=child_status):
                 output, errors = io.StringIO(), io.StringIO()
-                with patch("codex_run.route.route", return_value=("gpt-6-luna", "medium", {})) as pick, \
+                with patch("codex_run.route.route", return_value=("gpt-6.1-terra", "medium", {})) as pick, \
                         patch("codex_run.subprocess.run", return_value=subprocess.CompletedProcess([], child_status)) as run, \
                         contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                     status = codex_run.main([prompt] + separator + options)
                 self.assertEqual(status, expected_status)
                 pick.assert_called_once_with(prompt, os.getcwd(), "codex", exclude=("claude",))
                 run.assert_called_once_with([
-                    "codex", "exec", *options, "--model", "gpt-6-luna", "-c",
+                    "codex", "exec", *options, "--model", "gpt-6.1-terra", "-c",
                     'model_reasoning_effort="medium"', "--", prompt,
                 ])
                 self.assertEqual(output.getvalue(), "")
-                self.assertIn("gpt-6-luna", errors.getvalue())
+                self.assertIn("gpt-6.1-terra", errors.getvalue())
                 self.assertIn("medium", errors.getvalue())
 
     def test_missing_codex_returns_127_and_reports_stderr(self):

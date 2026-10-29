@@ -50,6 +50,7 @@ class ProviderTests(unittest.TestCase):
         self.addCleanup(root.stop)
 
     def test_respan_model_override_and_transport(self):
+        os.environ["ROUTER_PROVIDER"] = "respan"
         os.environ["ROUTER_MODEL"] = "span-01-pro"
         with patch("model_provider.urllib.request.urlopen", return_value=response(respan_body())) as send:
             probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
@@ -84,7 +85,8 @@ class ProviderTests(unittest.TestCase):
                 self.assertEqual(probabilities, {"one": 0.8, "two": 0.2})
                 self.assertEqual(metadata["scoring_provider"], provider)
 
-    def test_invalid_primary_scores_use_fallback(self):
+    def test_invalid_respan_primary_scores_use_fallback(self):
+        os.environ["ROUTER_PROVIDER"] = "respan"
         invalid = [
             {}, {"results": []}, respan_body(True), respan_body("0.8"),
             respan_body(math.nan), respan_body(math.inf), respan_body(-0.1), respan_body(1.1),
@@ -102,18 +104,18 @@ class ProviderTests(unittest.TestCase):
                 self.assertIn("error", metadata["attempts"][0])
 
     def test_low_scores_do_not_call_fallback(self):
-        with patch("model_provider.urllib.request.urlopen", return_value=response(respan_body(0.1, 0.2))) as send:
+        with patch("model_provider.urllib.request.urlopen", return_value=response(typesafe_body(0.1, 0.2))) as send:
             probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual(send.call_count, 1)
         self.assertEqual(probabilities, {"one": 0.1, "two": 0.2})
-        self.assertEqual(metadata["scoring_provider"], "respan")
+        self.assertEqual(metadata["scoring_provider"], "typesafe")
 
     def test_missing_primary_key_uses_fallback(self):
-        del os.environ["RESPAN_API_KEY"]
+        del os.environ["TYPESAFE_API_KEY"]
         with patch("model_provider.urllib.request.urlopen", return_value=response(typesafe_body())) as send:
             _, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual(send.call_count, 1)
-        self.assertEqual(metadata["scoring_provider"], "typesafe")
+        self.assertEqual(metadata["scoring_provider"], "openrouter")
         self.assertIn("error", metadata["attempts"][0])
 
     def test_invalid_typesafe_primary_uses_fallback(self):
@@ -131,7 +133,7 @@ class ProviderTests(unittest.TestCase):
         error = urllib.error.HTTPError("https://example.invalid", 503, "unavailable", {}, None)
         with patch("model_provider.urllib.request.urlopen", side_effect=[error, response(typesafe_body())]):
             _, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
-        self.assertEqual(metadata["scoring_provider"], "typesafe")
+        self.assertEqual(metadata["scoring_provider"], "openrouter")
         self.assertIn("503", metadata["attempts"][0]["error"])
 
     def test_http_failure_attempts_do_not_disclose_response_or_credentials(self):
@@ -140,7 +142,7 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaises(model_provider.ScoreError) as caught:
                 model_provider.scores("Synthetic task", BEHAVIORS)
         attempts = caught.exception.attempts
-        self.assertEqual([attempt["provider"] for attempt in attempts], ["respan", "typesafe", "openrouter"])
+        self.assertEqual([attempt["provider"] for attempt in attempts], ["typesafe", "openrouter", "respan"])
         for attempt in attempts:
             self.assertIn("error", attempt)
             self.assertGreaterEqual(attempt["elapsed_ms"], 0)
@@ -150,25 +152,26 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("synthetic-", diagnostic)
 
     def test_duplicate_fallback_is_attempted_once(self):
-        for provider, expected in (("typesafe", ["typesafe", "openrouter"]),
-                                   ("openrouter", ["openrouter", "typesafe"])):
+        for provider, expected in (("typesafe", ["typesafe", "openrouter", "respan"]),
+                                   ("openrouter", ["openrouter", "typesafe", "respan"]),
+                                   ("respan", ["respan", "typesafe", "openrouter"])):
             with self.subTest(provider=provider):
                 os.environ["ROUTER_PROVIDER"] = provider
                 with patch("model_provider.urllib.request.urlopen", side_effect=OSError("offline")) as send:
                     with self.assertRaises(model_provider.ScoreError) as caught:
                         model_provider.scores("Synthetic task", BEHAVIORS)
-                self.assertEqual(send.call_count, 2)
+                self.assertEqual(send.call_count, 3)
                 self.assertEqual([attempt["provider"] for attempt in caught.exception.attempts], expected)
 
-    def test_openrouter_recovers_after_both_providers_fail(self):
+    def test_respan_recovers_after_both_jev_routes_fail(self):
         with patch("model_provider.urllib.request.urlopen", side_effect=[
-                TimeoutError(), OSError("offline"), response(typesafe_body())]) as send:
+                TimeoutError(), OSError("offline"), response(respan_body())]) as send:
             probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual([call.args[0].full_url for call in send.call_args_list],
-                         [model_provider.PROVIDERS[p][0] for p in ("respan", "typesafe", "openrouter")])
+                         [model_provider.PROVIDERS[p][0] for p in ("typesafe", "openrouter", "respan")])
         self.assertEqual(probabilities, {"one": 0.8, "two": 0.2})
-        self.assertEqual(metadata["scoring_provider"], "openrouter")
-        self.assertEqual(metadata["scoring_model"], "typesafe/jev-1.13")
+        self.assertEqual(metadata["scoring_provider"], "respan")
+        self.assertEqual(metadata["scoring_model"], "span-01-free")
         self.assertEqual([a.get("error") for a in metadata["attempts"]],
                          ["TimeoutError", "OSError", None])
 

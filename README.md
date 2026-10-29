@@ -1,8 +1,9 @@
 # system-one-router
 
 Choose a model and effort for Claude Code subagents or whole Codex tasks with a
-small decision model. A Claude `PreToolUse` hook updates Agent calls; the Codex
-launcher selects a model and effort before starting `codex exec`.
+small decision model, or look them up by role for cross-harness workers. A Claude
+`PreToolUse` hook updates Agent calls; the Codex launcher selects a model and effort
+before starting `codex exec`.
 Supports Respan Lite, Respan Pro, direct TypeSafe Jev, and OpenRouter System One models.
 
 Python 3.9+ and the standard library are sufficient. To execute tasks, install
@@ -34,10 +35,9 @@ Git ignores it.
 python3 model_provider.py check
 ```
 
-This checks that keys are present for the primary provider and both Jev fallbacks.
-It prints key names, never values, and exits nonzero if a required key is missing.
-It does not contact providers or validate credentials. A direct TypeSafe setup also
-needs `OPENROUTER_API_KEY` for fallback.
+This checks that keys are present for every provider in the chain: direct Jev,
+OpenRouter Jev, and Respan. It prints key names, never values, and exits nonzero if a
+required key is missing. It does not contact providers or validate credentials.
 
 ## Choose a scoring provider
 
@@ -45,15 +45,18 @@ Set `ROUTER_PROVIDER` and `ROUTER_MODEL` in the environment or `.env`:
 
 | Provider | `ROUTER_PROVIDER` | `ROUTER_MODEL` | Credential |
 |---|---|---|---|
-| Respan Lite (default) | `respan` | `span-01-free` | `RESPAN_API_KEY` |
+| TypeSafe Jev (default) | `typesafe` | `jev-1.13.0` | `TYPESAFE_API_KEY` |
+| Respan Lite | `respan` | `span-01-free` | `RESPAN_API_KEY` |
 | Respan Pro | `respan` | `span-01-pro` | `RESPAN_API_KEY` |
-| TypeSafe Jev | `typesafe` | `jev-1.13.0` | `TYPESAFE_API_KEY` |
 | OpenRouter | `openrouter` | `typesafe/jev-1.13`, or another compatible System One model ID | `OPENROUTER_API_KEY` |
 
 Omitting `ROUTER_MODEL` selects the provider's default from `model_provider.py`.
 Set both variables when switching providers if a model is already configured.
 The `PRIMARY` and `FALLBACKS` constants in that file define the default provider chain:
-Respan → direct TypeSafe Jev → OpenRouter Jev.
+direct TypeSafe Jev → OpenRouter Jev → Respan Lite. A configured primary goes first, then
+the rest in that order. Jev replaced Respan Lite as the default on 2026-10-29 after the
+live evals: on accepted labels, tier 0.92 vs 0.78 (paired exact McNemar p = 0.02),
+effort 0.90 vs 0.62, and p50 latency 180 vs 863 ms.
 
 ```sh
 # Respan Pro
@@ -85,8 +88,7 @@ harness in the tier's row wins. The harness is independent of the scoring provid
 |---|---|---|
 | `judgment`: deciding, comparing, weighing trade-offs | `fable` | `gpt-6-astra` |
 | `hard`: engineering with an unknown cause or solution | `opus` | `gpt-6.1-sol` |
-| `routine`: engineering with a known approach | `sonnet` | `gpt-6.1-terra` |
-| `trivial`: a lookup, a one-line edit, a short answer | `haiku` | `gpt-6-luna` |
+| `routine`: engineering with a known approach, from a one-line edit up | `sonnet` | `gpt-6.1-terra` |
 | Fallback tier/effort | `routine` / `xhigh` | `hard` / `xhigh` |
 
 The Claude hook excludes `codex`, and `codex_run.py` excludes `claude`. With no
@@ -95,19 +97,35 @@ definitions, the tier table, and the fallbacks live in `route.py` (`TIERS`, `MOD
 `FALLBACKS`). A model rename, a new harness, or a reordered row changes only the tables.
 These are initial routing rules, not validated rankings; Terra's place under `routine`
 follows the Codex model cache's description of its predecessor, gpt-5.6-terra, as a
-"balanced model for straightforward work".
-Both harnesses use `low`, `medium`, `high`, and `xhigh`; the listed Codex models
-support all four. Account access may differ.
+"balanced model for straightforward work"; gpt-6.1-terra's own entry says only
+"GPT-6.1 Terra Codex model." Haiku and Luna are not routed: lookups and one-line edits
+go to `routine` at `medium`, the lowest effort the scorer picks. Both harnesses accept
+`medium`, `high`, and `xhigh`. Account access may differ.
 
-1. Score the definitions in `route.py`: four tiers and four efforts (`xhigh`, `high`,
-   `medium`, `low`), the same eight definitions for every caller. Respan returns
+1. Score the definitions in `route.py`: three tiers and three efforts (`xhigh`, `high`,
+   `medium`), the same six definitions for every caller. Respan returns
    `p_present`; TypeSafe and OpenRouter return one `noul` probability per definition.
-2. Take the highest score in each group, then map the tier to the first model whose
-   harness is not excluded. A winner below `FLOOR` (`0.3`) uses that group's default from
-   the first remaining harness's fallback. Low scores do not trigger a provider retry.
-3. Missing credentials, request errors, or malformed scores trigger direct TypeSafe
-   Jev, then OpenRouter Jev. If all attempts fail, use the first remaining harness's
-   fallback pair.
+2. Take the highest tier score, then map the tier to the first model whose harness is
+   not excluded. Effort is the highest level scoring at least `EFFORT_BAR` (`0.5`): the
+   effort definitions describe what a mistake would cost, and a costlier mistake also
+   fits the levels below. A tier winner below `FLOOR` (`0.3`), or no effort at the bar,
+   uses that group's default from the first remaining harness's fallback. Low scores do
+   not trigger a provider retry. The stakes-based efforts and this rule replaced argmax
+   over "how careful" definitions on 2026-10-29. On the live evals, Jev's accepted effort
+   rose from 0.67 to 0.83 and efforts below every accepted label fell from 15% to 3%,
+   while xhigh picks rose from 21 to 34 of 60 cases.
+
+The `hard` and `routine` tier text and the `xhigh` effort text were rewritten on 2026-10-29
+by a hill-climb on the 100 train cases in `evals/cases.jsonl`: one definition per candidate,
+accepted only on a gain of at least two cases. The four kept rewrites were scored once on
+the 50 held-out cases. On Jev, accepted effort rose from 0.76 to 0.84, effort above every
+accepted label fell from 24% to 14%, xhigh picks fell from 58% to 42%, tier rose from 0.94
+to 0.96, and effort below the label rose by one case. Respan, which was not tuned, moved the
+same way. At n = 50 the effort gain is not significant (6 cases gained vs 2 lost, paired
+exact p = 0.29). Asking tier as one Jev `choice` and effort as one `score` instead of
+independent `noul` questions gained nothing beyond noise on the same cases.
+3. Missing credentials, request errors, or malformed scores trigger the next provider
+   in the chain. If all attempts fail, use the first remaining harness's fallback pair.
    Duplicate provider/model pairs are attempted only once, including when a fallback
    is selected as the primary.
 
@@ -124,6 +142,36 @@ Provider and log-write failures do not block spawning.
 The scoring model chooses the execution model; these are separate settings.
 The shared probability format does not establish equal calibration across providers.
 Treat routing quality and the current threshold as experimental.
+
+## Route by role
+
+A driver that knows what it is delegating names the role instead of scoring the task.
+The pick needs no network call, is logged like a scored pick, and may land in either
+harness:
+
+| Role | `claude` | `codex` | Effort |
+|---|---|---|---|
+| `implement` | `opus` | **`gpt-6.1-sol`** | `xhigh` |
+| `validate` | **`opus`** | `gpt-6-astra` | `xhigh` |
+| `plan` | **`opus`** | `gpt-6.1-sol` | `xhigh` |
+| `advise` | `fable` | **`gpt-6-astra`** | `high` |
+| `research` | `sonnet` | **`gpt-6.1-terra`** | `high` |
+| `commit` | `sonnet` | **`gpt-6.1-terra`** | `medium` |
+
+Bold marks each row's first harness, the pick when nothing is excluded; `--exclude`
+works as it does for tiers. Validation runs on another lab's model than implementation.
+An advisor should come from the other harness, so a driver excludes its own for `advise`.
+
+```sh
+python3 route.py --role plan --json -- "$(cat task.txt)"
+# {"model": "opus", "effort": "xhigh", "role": "plan", "harness": "claude"}
+python3 route.py --role advise --exclude claude --json -- "$(cat task.txt)"
+# {"model": "gpt-6-astra", "effort": "high", "role": "advise", "harness": "codex"}
+```
+
+The rex-agents skill routes open worker launches this way. The Agent hook and
+`codex_run.py` still score. The role table lives in `route.py` (`ROLES`); its rows and
+efforts are initial choices, not measured.
 
 ## Try Claude Code with a shell function
 
@@ -166,7 +214,7 @@ Select a Codex model and effort without launching it:
 
 ```sh
 python3 route.py --exclude claude --json -- "Explain what a Python list is"
-# Example: {"model": "gpt-6-luna", "effort": "low", "tier": "trivial", "harness": "codex"}
+# Example: {"model": "gpt-6.1-terra", "effort": "medium", "tier": "routine", "harness": "codex"}
 ```
 
 `--json` emits one model/effort/tier/harness object, including when scoring fails and
@@ -218,8 +266,21 @@ python3 -m unittest discover -s tests -v        # Offline tests; no API keys nee
 printf '%s\n' '{"tool_name":"Read","tool_input":{}}' | python3 agent_hook.py
 ```
 
-The last command should exit successfully without output. To test an Agent call
-directly, use a synthetic prompt; this makes a live scoring request:
+The last command should exit successfully without output.
+
+Live evals send every labeled synthetic case in `evals/cases.jsonl` to Respan and to
+direct TypeSafe Jev through the production selection, print per-provider metrics (tier
+and effort accuracy, under- and over-routing, margins, latency, a confusion matrix), and
+write per-case scores with the definitions used to the ignored `artifacts/evals/`. The 150
+cases carry a fixed 100/50 train/held-out `split`. Tier labels agree 149/150 with a blind
+`gpt-6-astra` relabel; effort labels come from two blind labelers on the stakes rubric
+(Cohen's kappa 0.74 and 0.85). Gates sit three cases below the 2026-10-29 baseline:
+
+```sh
+python3 -m unittest discover -s evals -v        # Live; needs RESPAN_API_KEY and TYPESAFE_API_KEY
+```
+
+To test an Agent call directly, use a synthetic prompt; this makes a live scoring request:
 
 ```sh
 printf '%s\n' '{"tool_name":"Agent","tool_input":{"prompt":"Explain what a Python list is","subagent_type":"general-purpose"}}' \
@@ -232,7 +293,7 @@ scores, and provider attempts with timing and error categories. Successful scori
 also records `scoring_provider` and `scoring_model`. Logs stay in the repository's
 ignored `artifacts/beta_log.jsonl`; logging failure does not discard a decision.
 
-Prompts are sent to the selected scoring service and, on failure, TypeSafe. Keep
+Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
 credentials and logs out of commits and use synthetic prompts for integration tests.
 
 ## Files
@@ -240,7 +301,8 @@ credentials and logs out of commits and use synthetic prompts for integration te
 | File | Purpose |
 |---|---|
 | `model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
-| `route.py` | Tier and effort definitions, the tier-to-model table, fallbacks, selection, and logs |
+| `route.py` | Tier and effort definitions, the tier and role tables, fallbacks, selection, and logs |
 | `agent_hook.py` | Claude Code `PreToolUse` JSON interface |
 | `codex_run.py` | Launch a whole Codex task with the selected model and effort |
 | `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py` | Offline provider, routing, hook, and launcher regression tests |
+| `evals/cases.jsonl`, `evals/test_live_routing.py` | Labeled synthetic routing cases and the live evals that score them |
