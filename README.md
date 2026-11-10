@@ -115,7 +115,7 @@ harness in the tier's row wins. The harness is independent of the scoring provid
 | `judgment`: deciding, comparing, weighing trade-offs | `fable` | `gpt-6-astra` |
 | `hard`: engineering with an unknown cause or solution | `opus` | `gpt-6.1-sol` |
 | `routine`: engineering with a known approach, from a one-line edit up | `sonnet` | `gpt-6.1-terra` |
-| Fallback tier/effort | `routine` / `xhigh` | `hard` / `xhigh` |
+| Fallback tier/effort for `route` and `codex` | `routine` / `xhigh` | `hard` / `xhigh` |
 
 The Claude hook excludes `codex`, and `s1r codex` excludes `claude`. With no
 exclusion, every tier picks Claude, because `claude` comes first in each row. Tier
@@ -151,19 +151,27 @@ same way. At n = 50 the effort gain is not significant (6 cases gained vs 2 lost
 exact p = 0.29). Asking tier as one Jev `choice` and effort as one `score` instead of
 independent `noul` questions gained nothing beyond noise on the same cases.
 3. Missing credentials, request errors, or malformed scores trigger the next provider
-   in the chain. If all attempts fail, use the first remaining harness's fallback pair.
+   in the chain. If all attempts fail, `route` and `codex` use the first remaining harness's
+   fallback pair; the Claude hook leaves the Agent call unrouted (below).
    Duplicate provider/model pairs are attempted only once, including when a fallback
    is selected as the primary.
 
 Requests use an 8-second socket timeout per attempt with no retries for the same
 provider/model pair. The shell example gives the whole hook 30 seconds. Invalid configuration
-also produces the static default; use `check` to catch it before starting a session.
+counts as a scoring failure; use `s1r status` to catch it before starting a session.
 
 The Claude hook sets the Agent call's `model` and `effort` fields and keeps every
 other input, including the agent type and its instructions. Per-call `effort` needs
 Claude Code 2.1.292 or later; forks ignore both fields, and `CLAUDE_CODE_EFFORT_LEVEL`
-overrides the routed effort. Non-Agent calls and empty prompts pass through.
-Provider and log-write failures do not block spawning.
+overrides the routed effort. Non-Agent calls and empty prompts pass through. When every
+provider fails, the hook prints nothing, so the Agent call runs with the model and effort the
+driver wrote; the log records the fallback it did not apply with `"applied": false`. A floored
+tier or effort still applies the fallback default. Log-write failures do not block spawning.
+An agent type whose definition pins a model also passes through unscored, so the pin and the
+session's effort apply: the hook matches `subagent_type` to the frontmatter `name:` in
+`<cwd>/.claude/agents`, then `${CLAUDE_CONFIG_DIR:-~/.claude}/agents`, and skips any `model:`
+other than `inherit`. The log records the pin with `"applied": false`. Built-in and plugin
+agents, and files without a pin, are routed.
 
 The scoring model chooses the execution model; these are separate settings.
 The shared probability format does not establish equal calibration across providers.

@@ -143,7 +143,20 @@ class RouteTests(unittest.TestCase):
             model, effort, entry = route.route("Synthetic task", "", "agent")
         self.assertEqual((model, effort, entry["tier"]), ("sonnet", "xhigh", "routine"))
         self.assertIn("error", entry)
+        self.assertNotIn("applied", entry)
         self.assertEqual(entry["attempts"], attempts)
+
+    def test_scoring_failure_without_fallback_logs_the_pick_as_not_applied(self):
+        with patch("system_one_router.route.model_provider.scores", side_effect=model_provider.ScoreError([])):
+            route.route("Synthetic task", "", "agent", fallback=False)
+        with patch("system_one_router.route.model_provider.scores", return_value=(scores("hard", "medium"), {})):
+            route.route("Synthetic task", "", "agent", fallback=False)
+        with patch("system_one_router.route.model_provider.scores", return_value=({**scores(), "tier_hard": 0.1}, {})):
+            route.route("Synthetic task", "", "agent", fallback=False)
+        failed, scored, floored = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual((failed["error"], failed["applied"]), ("ScoreError", False))
+        self.assertNotIn("applied", scored)
+        self.assertEqual((floored["floored"], "applied" in floored), (["tier"], False))
 
     def test_log_failure_does_not_block_the_selected_spawn(self):
         with patch("system_one_router.route.model_provider.scores", return_value=(scores(), {})), \
@@ -153,7 +166,63 @@ class RouteTests(unittest.TestCase):
         self.assertTrue(entry["log_error"])
 
 
+def agent_file(directory, name, model=None, file_name=None):
+    """Write an agent definition with a block-scalar description, as real agent files have."""
+    directory.mkdir(parents=True, exist_ok=True)
+    lines = ["---", f"name: {name}", "description: |", "  model: decoy-in-description", "tools: Read"]
+    lines += [f"model: {model}"] if model is not None else []
+    (directory / (file_name or name + ".md")).write_text("\n".join(lines + ["---", "# Body", "model: decoy"]) + "\n")
+
+
 class HookTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.log = self.root / "routing.jsonl"
+        self.user_agents = self.root / "config" / "agents"
+        self.project = self.root / "project"
+        self.project_agents = self.project / ".claude" / "agents"
+        for patcher in (patch.object(route, "LOG", self.log),
+                        patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.root / "config")})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def agent_event(self, agent_type):
+        return {"tool_name": "Agent", "cwd": str(self.project),
+                "tool_input": {"prompt": "Synthetic task", "subagent_type": agent_type}}
+
+    def test_pinned_agent_passes_through_without_scoring_and_logs_why(self):
+        agent_file(self.user_agents, "local-tester", "claude-opus-5-5", file_name="tester.md")
+        with patch("system_one_router.route.model_provider.scores") as score:
+            self.assertEqual(self.invoke(self.agent_event("local-tester")), "")
+        score.assert_not_called()
+        entry = json.loads(self.log.read_text())
+        self.assertEqual({key: entry[key] for key in ("kind", "cwd", "text", "subagent_type", "pinned", "applied")}, {
+            "kind": "agent", "cwd": str(self.project), "text": "Synthetic task",
+            "subagent_type": "local-tester", "pinned": "claude-opus-5-5", "applied": False})
+
+    def test_project_agent_file_takes_precedence_over_user_file(self):
+        agent_file(self.user_agents, "locator", "claude-sonnet-5-5")
+        agent_file(self.project_agents, "locator", "inherit")
+        agent_file(self.user_agents, "analyzer", "inherit")
+        agent_file(self.project_agents, "analyzer", '"opus"')
+        with patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})) as pick:
+            self.assertIn("updatedInput", self.invoke(self.agent_event("locator")))
+            self.assertEqual(self.invoke(self.agent_event("analyzer")), "")
+        pick.assert_called_once()
+        self.assertEqual(json.loads(self.log.read_text())["pinned"], "opus")
+
+    def test_unpinned_agents_are_routed(self):
+        agent_file(self.user_agents, "inheritor", "inherit")
+        agent_file(self.user_agents, "unset")
+        agent_file(self.user_agents, "other-name", "opus", file_name="general-purpose.md")
+        for agent_type in ("inheritor", "unset", "general-purpose", "plugin:agent", None):
+            with self.subTest(agent_type=agent_type), \
+                    patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})) as pick:
+                self.assertIn("updatedInput", self.invoke(self.agent_event(agent_type)))
+                pick.assert_called_once()
+
     def invoke(self, event):
         output = io.StringIO()
         with patch("system_one_router.agent_hook.sys.stdin", io.StringIO(json.dumps(event))), contextlib.redirect_stdout(output):
@@ -167,7 +236,7 @@ class HookTests(unittest.TestCase):
                 call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": agent_type}
                 with patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})) as pick:
                     output = json.loads(self.invoke({"tool_name": "Agent", "cwd": "/workspace", "tool_input": call}))
-                pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",))
+                pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",), fallback=False)
                 self.assertEqual(output, {"systemMessage": "routed-opus-high", "hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "updatedInput": {
                         **call, "model": "opus", "effort": "high", "description": "opus-high · Example"}}})
@@ -189,6 +258,11 @@ class HookTests(unittest.TestCase):
                 output = json.loads(self.invoke({"tool_name": "Agent", "tool_input": call}))
             self.assertEqual(output["hookSpecificOutput"]["updatedInput"]["description"], expected)
 
+    def test_unapplied_pick_passes_the_call_through(self):
+        entry = {"error": "ScoreError", "applied": False}
+        with patch("system_one_router.agent_hook.route.route", return_value=("sonnet", "xhigh", entry)):
+            self.assertEqual(self.invoke({"tool_name": "Agent", "tool_input": {"prompt": "Synthetic task"}}), "")
+
     def test_non_agent_and_empty_prompts_emit_nothing(self):
         for event in ({}, {"tool_name": "Read", "tool_input": {"prompt": "Synthetic task"}},
                       {"tool_name": "Agent", "tool_input": {}},
@@ -197,7 +271,7 @@ class HookTests(unittest.TestCase):
                 self.assertEqual(self.invoke(event), "")
                 pick.assert_not_called()
 
-    def test_hook_subprocess_without_keys_routes_and_logs_provider_failures(self):
+    def test_hook_subprocess_without_keys_passes_through_and_logs_provider_failures(self):
         call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": "general-purpose"}
         environment = os.environ.copy()
         for name in ("ROUTER_PROVIDER", "ROUTER_MODEL", "RESPAN_API_KEY",
@@ -206,18 +280,16 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             environment.update(PYTHONPATH=str(Path(__file__).resolve().parent.parent),
-                               XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
+                               XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
+                               CLAUDE_CONFIG_DIR=str(root / "claude"))
             result = subprocess.run(
                 [sys.executable, "-m", "system_one_router", "hook"],
                 input=json.dumps({"tool_name": "Agent", "cwd": str(root), "tool_input": call}),
                 text=True, capture_output=True, cwd=root, env=environment, timeout=5,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            output = json.loads(result.stdout)
-            self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
-                **call, "model": "sonnet", "effort": "xhigh", "description": "sonnet-xhigh · Example"})
+            self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
             entry = json.loads((root / "state" / "system-one-router" / "beta_log.jsonl").read_text())
-        self.assertIn("ScoreError", entry["error"])
+        self.assertEqual((entry["error"], entry["applied"]), ("ScoreError", False))
         self.assertEqual([attempt["provider"] for attempt in entry["attempts"]], ["typesafe", "openrouter", "respan"])
         self.assertTrue(all(attempt["error"] == "ValueError" for attempt in entry["attempts"]))
 

@@ -57,13 +57,14 @@ BEHAVIORS = ([{"id": f"tier_{k}", "definition": v} for k, v in TIERS.items()]
              + [{"id": f"effort_{k}", "definition": v} for k, v in EFFORTS.items()])
 
 
-def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: str = "") -> tuple[str, str, dict]:
-    """Pick and log one prompt among the harnesses not excluded: by role if named, else by score."""
+def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: str = "",
+          fallback: bool = True) -> tuple[str, str, dict]:
+    """Pick and log one prompt among the harnesses not excluded: by role if named, else by score.
+    Without fallback, a scoring failure logs the fallback pick with applied=False for the caller to skip."""
     allowed = [harness for harness in FALLBACKS if harness not in exclude]
     if set(exclude) - set(FALLBACKS) or not allowed:
         raise ValueError(f"exclude must name harnesses from {list(FALLBACKS)} and leave one; got {list(exclude)}")
-    entry: dict = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "kind": kind,
-                   "cwd": cwd, "text": text, "exclude": list(exclude)}
+    entry = record(kind, cwd, text, exclude)
     if role:
         models, effort = ROLES[role]
         entry["role"] = role
@@ -73,13 +74,26 @@ def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: s
         entry["tier"] = tier
     harness = next(h for h in models if h in allowed)
     entry.update(harness=harness, model=models[harness], effort=effort)
+    if "error" in entry and not fallback:
+        entry["applied"] = False
+    log(entry)
+    return entry["model"], effort, entry
+
+
+def record(kind: str, cwd: str, text: str, exclude: tuple[str, ...] = ()) -> dict:
+    """Start a log entry for one prompt."""
+    return {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "kind": kind,
+            "cwd": cwd, "text": text, "exclude": list(exclude)}
+
+
+def log(entry: dict) -> None:
+    """Append entry to LOG; a write failure marks the entry instead of raising."""
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
         entry["log_error"] = True
-    return entry["model"], effort, entry
 
 
 def score(text: str, fallback: tuple[str, str], entry: dict) -> tuple[str, str]:
