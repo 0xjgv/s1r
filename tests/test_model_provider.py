@@ -9,7 +9,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-import model_provider
+from system_one_router import model_provider
 
 
 BEHAVIORS = [
@@ -45,14 +45,14 @@ class ProviderTests(unittest.TestCase):
         env = patch.dict(os.environ, self.environment, clear=True)
         env.start()
         self.addCleanup(env.stop)
-        root = patch.object(model_provider, "ROOT", self.root)
-        root.start()
-        self.addCleanup(root.stop)
+        env_file = patch.object(model_provider, "ENV", self.root / ".env")
+        env_file.start()
+        self.addCleanup(env_file.stop)
 
     def test_respan_model_override_and_transport(self):
         os.environ["ROUTER_PROVIDER"] = "respan"
         os.environ["ROUTER_MODEL"] = "span-01-pro"
-        with patch("model_provider.urllib.request.urlopen", return_value=response(respan_body())) as send:
+        with patch("system_one_router.model_provider.urllib.request.urlopen", return_value=response(respan_body())) as send:
             probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         request = send.call_args.args[0]
         body = json.loads(request.data)
@@ -72,7 +72,7 @@ class ProviderTests(unittest.TestCase):
                 ("openrouter", "typesafe/jev-1.13", "synthetic-openrouter-key")):
             with self.subTest(provider=provider):
                 os.environ["ROUTER_PROVIDER"] = provider
-                with patch("model_provider.urllib.request.urlopen", return_value=response(typesafe_body())) as send:
+                with patch("system_one_router.model_provider.urllib.request.urlopen", return_value=response(typesafe_body())) as send:
                     probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
                 request = send.call_args.args[0]
                 self.assertEqual(request.full_url, model_provider.PROVIDERS[provider][0])
@@ -95,7 +95,7 @@ class ProviderTests(unittest.TestCase):
         ]
         for body in invalid:
             with self.subTest(body=body):
-                with patch("model_provider.urllib.request.urlopen", side_effect=[
+                with patch("system_one_router.model_provider.urllib.request.urlopen", side_effect=[
                         response(body), response(typesafe_body())]) as send:
                     probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
                 self.assertEqual(send.call_count, 2)
@@ -104,7 +104,7 @@ class ProviderTests(unittest.TestCase):
                 self.assertIn("error", metadata["attempts"][0])
 
     def test_low_scores_do_not_call_fallback(self):
-        with patch("model_provider.urllib.request.urlopen", return_value=response(typesafe_body(0.1, 0.2))) as send:
+        with patch("system_one_router.model_provider.urllib.request.urlopen", return_value=response(typesafe_body(0.1, 0.2))) as send:
             probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual(send.call_count, 1)
         self.assertEqual(probabilities, {"one": 0.1, "two": 0.2})
@@ -112,7 +112,7 @@ class ProviderTests(unittest.TestCase):
 
     def test_missing_primary_key_uses_fallback(self):
         del os.environ["TYPESAFE_API_KEY"]
-        with patch("model_provider.urllib.request.urlopen", return_value=response(typesafe_body())) as send:
+        with patch("system_one_router.model_provider.urllib.request.urlopen", return_value=response(typesafe_body())) as send:
             _, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual(send.call_count, 1)
         self.assertEqual(metadata["scoring_provider"], "openrouter")
@@ -123,7 +123,7 @@ class ProviderTests(unittest.TestCase):
         for body in ({"answers": {}}, typesafe_body(False),
                      {"answers": {"one": {"type": "noul", "noul": 0.8}}}):
             with self.subTest(body=body):
-                with patch("model_provider.urllib.request.urlopen", side_effect=[
+                with patch("system_one_router.model_provider.urllib.request.urlopen", side_effect=[
                         response(body), response(typesafe_body())]):
                     _, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
                 self.assertEqual(metadata["scoring_provider"], "typesafe")
@@ -131,14 +131,14 @@ class ProviderTests(unittest.TestCase):
 
     def test_http_primary_failure_uses_fallback(self):
         error = urllib.error.HTTPError("https://example.invalid", 503, "unavailable", {}, None)
-        with patch("model_provider.urllib.request.urlopen", side_effect=[error, response(typesafe_body())]):
+        with patch("system_one_router.model_provider.urllib.request.urlopen", side_effect=[error, response(typesafe_body())]):
             _, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual(metadata["scoring_provider"], "openrouter")
         self.assertIn("503", metadata["attempts"][0]["error"])
 
     def test_http_failure_attempts_do_not_disclose_response_or_credentials(self):
         error = urllib.error.HTTPError("https://example.invalid", 401, "sensitive response text", {}, None)
-        with patch("model_provider.urllib.request.urlopen", side_effect=[error, ValueError("sensitive response text"), OSError("sensitive response text")]):
+        with patch("system_one_router.model_provider.urllib.request.urlopen", side_effect=[error, ValueError("sensitive response text"), OSError("sensitive response text")]):
             with self.assertRaises(model_provider.ScoreError) as caught:
                 model_provider.scores("Synthetic task", BEHAVIORS)
         attempts = caught.exception.attempts
@@ -157,14 +157,14 @@ class ProviderTests(unittest.TestCase):
                                    ("respan", ["respan", "typesafe", "openrouter"])):
             with self.subTest(provider=provider):
                 os.environ["ROUTER_PROVIDER"] = provider
-                with patch("model_provider.urllib.request.urlopen", side_effect=OSError("offline")) as send:
+                with patch("system_one_router.model_provider.urllib.request.urlopen", side_effect=OSError("offline")) as send:
                     with self.assertRaises(model_provider.ScoreError) as caught:
                         model_provider.scores("Synthetic task", BEHAVIORS)
                 self.assertEqual(send.call_count, 3)
                 self.assertEqual([attempt["provider"] for attempt in caught.exception.attempts], expected)
 
     def test_respan_recovers_after_both_jev_routes_fail(self):
-        with patch("model_provider.urllib.request.urlopen", side_effect=[
+        with patch("system_one_router.model_provider.urllib.request.urlopen", side_effect=[
                 TimeoutError(), OSError("offline"), response(respan_body())]) as send:
             probabilities, metadata = model_provider.scores("Synthetic task", BEHAVIORS)
         self.assertEqual([call.args[0].full_url for call in send.call_args_list],
@@ -194,18 +194,37 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             model_provider.configuration()
 
-    def test_check_requires_primary_and_fallback_keys_without_network(self):
+    def test_status_requires_primary_and_fallback_keys_without_network(self):
         for missing, expected in ((None, 0), ("RESPAN_API_KEY", 1),
                                   ("OPENROUTER_API_KEY", 1), ("TYPESAFE_API_KEY", 1)):
             with self.subTest(missing=missing), patch.dict(os.environ, self.environment):
                 if missing:
                     del os.environ[missing]
                 output = io.StringIO()
-                with patch("model_provider.urllib.request.urlopen") as send, contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-                    result = model_provider.main(["check"])
+                with patch("system_one_router.model_provider.urllib.request.urlopen") as send, contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                    result = model_provider.status()
                 self.assertEqual(result, expected)
                 send.assert_not_called()
                 self.assertNotIn("synthetic-", output.getvalue())
+                if missing:
+                    self.assertIn(f"{missing} MISSING", output.getvalue())
+
+    def test_status_reports_sources_and_order(self):
+        del os.environ["RESPAN_API_KEY"]
+        (self.root / ".env").write_text("RESPAN_API_KEY='from-file'\nROUTER_MODEL=custom-model\n")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(model_provider.status(), 0)
+        lines = output.getvalue().splitlines()
+        env_file = str(self.root / ".env")
+        self.assertEqual(lines[:3], [f"config: {env_file} (found)", "ROUTER_PROVIDER: typesafe (default)",
+                                     f"ROUTER_MODEL: custom-model ({env_file})"])
+        self.assertEqual(lines[4:], [
+            "  1. typesafe/custom-model: TYPESAFE_API_KEY set (environment)",
+            "  2. typesafe/jev-1.13.0: TYPESAFE_API_KEY set (environment)",
+            "  3. openrouter/typesafe/jev-1.13: OPENROUTER_API_KEY set (environment)",
+            f"  4. respan/span-01-free: RESPAN_API_KEY set ({env_file})"])
+        self.assertNotIn("from-file", output.getvalue())
 
 
 if __name__ == "__main__":

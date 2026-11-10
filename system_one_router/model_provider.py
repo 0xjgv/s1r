@@ -1,4 +1,4 @@
-"""Scoring providers and configuration. Run `python3 model_provider.py check` to check keys."""
+"""Scoring providers and configuration. Run `s1r status` to see settings and keys."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ENV = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "system-one-router" / ".env"
 PRIMARY = ("typesafe", "jev-1.13.0")  # Beat span-01-free on the live evals in evals/ (2026-10-29).
 FALLBACKS = (("typesafe", "jev-1.13.0"), ("openrouter", "typesafe/jev-1.13"), ("respan", "span-01-free"))
 TIMEOUT_S = 8  # Three attempts leave room within the example hook's 30-second timeout under normal I/O.
@@ -27,18 +27,23 @@ DEFAULT_MODELS = {
 }
 
 
-def setting(name: str, default: str = "") -> str:
-    """Read the environment, then this repository's .env. Never execute shell expressions."""
+def lookup(name: str) -> tuple[str, str]:
+    """Return (value, source) from the environment, then ENV; source is "" when unset.
+    Never execute shell expressions."""
     value = os.environ.get(name, "").strip()
     if value:
-        return value
-    env = ROOT / ".env"
-    if env.exists():
-        for line in env.read_text().splitlines():
+        return value, "environment"
+    if ENV.exists():
+        for line in ENV.read_text().splitlines():
             key, separator, value = line.partition("=")
             if separator and key.strip() == name:
-                return value.strip().strip("\"'") or default
-    return default
+                value = value.strip().strip("\"'")
+                return (value, str(ENV)) if value else ("", "")
+    return "", ""
+
+
+def setting(name: str, default: str = "") -> str:
+    return lookup(name)[0] or default
 
 
 def configuration() -> tuple[str, str]:
@@ -63,7 +68,7 @@ def _score(provider: str, model: str, text: str, behaviors: list[dict]) -> dict[
     url, key_name = PROVIDERS[provider]
     key = setting(key_name)
     if not key:
-        raise ValueError(f"{key_name} not set (environment or .env)")
+        raise ValueError(f"{key_name} not set (environment or {ENV})")
     if provider == "respan":
         body = {"model": model, "behaviors": behaviors,
                 "span": {"input": [{"role": "user", "content": text}],
@@ -113,22 +118,23 @@ def scores(text: str, behaviors: list[dict]) -> tuple[dict[str, float], dict]:
     raise ScoreError(attempts)
 
 
-def main(argv: list[str]) -> int:
-    if argv != ["check"]:
-        print("Usage: python3 model_provider.py check", file=sys.stderr)
-        return 1
+def status() -> int:
+    """Print the settings with their sources and the provider chain's keys; exit nonzero if a key is missing.
+    Prints key names and sources, never values."""
     try:
+        print(f"config: {ENV} ({'found' if ENV.exists() else 'not found'})")
+        provider, model = configuration()
+        for name, value in (("ROUTER_PROVIDER", provider), ("ROUTER_MODEL", model)):
+            print(f"{name}: {value} ({lookup(name)[1] or 'default'})")
+        print("providers, tried in order:")
         missing = False
-        for provider, model in provider_chain():
+        for rank, (provider, model) in enumerate(provider_chain(), 1):
             key_name = PROVIDERS[provider][1]
-            present = bool(setting(key_name))
-            missing |= not present
-            print(f"{provider}/{model}: {key_name} {'set' if present else 'MISSING'}")
+            source = lookup(key_name)[1]
+            missing |= not source
+            print(f"  {rank}. {provider}/{model}: {key_name} " + (f"set ({source})" if source else "MISSING"))
         return int(missing)
     except (ValueError, OSError):
-        print("Cannot read provider configuration; check ROUTER_PROVIDER and .env", file=sys.stderr)
+        print(f"Cannot read provider configuration; check ROUTER_PROVIDER and {ENV}", file=sys.stderr)
         return 1
 
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

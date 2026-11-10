@@ -2,7 +2,6 @@ import contextlib
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,9 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import agent_hook
-import model_provider
-import route
+from system_one_router import agent_hook, model_provider, route
 
 
 def scores(tier="hard", effort="high", tier_score=0.9, effort_score=0.9):
@@ -36,7 +33,7 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(set(route.MODELS), {tier for tier, _ in cases})
         self.assertEqual(list(route.EFFORTS), ["xhigh", "high", "medium"])
         for tier, expected in cases:
-            with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier, "medium"), {})):
+            with self.subTest(tier=tier), patch("system_one_router.route.model_provider.scores", return_value=(scores(tier, "medium"), {})):
                 model, effort, entry = route.route("Synthetic task", "", "manual", exclude=("codex",))
             self.assertEqual((model, effort, entry["tier"], entry["harness"]), (expected, "medium", tier, "claude"))
             self.assertEqual(entry["floored"], [])
@@ -47,7 +44,7 @@ class RouteTests(unittest.TestCase):
                  "commit": ("gpt-6.1-terra", "medium")}
         self.assertEqual(set(route.ROLES), set(cases))
         for role, expected in cases.items():
-            with self.subTest(role=role), patch("route.model_provider.scores") as score:
+            with self.subTest(role=role), patch("system_one_router.route.model_provider.scores") as score:
                 model, effort, entry = route.route("Synthetic task", "/workspace", "manual", role=role)
             score.assert_not_called()
             self.assertEqual((model, effort, entry["role"]), (*expected, role))
@@ -67,7 +64,7 @@ class RouteTests(unittest.TestCase):
 
     def test_cli_role_json_names_the_role_instead_of_a_tier(self):
         output = io.StringIO()
-        with patch("route.model_provider.scores") as score, contextlib.redirect_stdout(output):
+        with patch("system_one_router.route.model_provider.scores") as score, contextlib.redirect_stdout(output):
             status = route.main(["--role", "plan", "--json", "--", "- Synthetic plan task"])
         self.assertEqual(status, 0)
         score.assert_not_called()
@@ -77,19 +74,19 @@ class RouteTests(unittest.TestCase):
     def test_without_exclusions_each_tier_takes_its_first_listed_harness(self):
         for tier, models in route.MODELS.items():
             harness = next(iter(models))
-            with self.subTest(tier=tier), patch("route.model_provider.scores", return_value=(scores(tier), {})):
+            with self.subTest(tier=tier), patch("system_one_router.route.model_provider.scores", return_value=(scores(tier), {})):
                 model, _, entry = route.route("Synthetic task", "", "manual")
             self.assertEqual((model, entry["harness"], entry["exclude"]), (models[harness], harness, []))
 
     def test_excluding_an_unknown_or_every_harness_is_refused_before_scoring(self):
         for exclude in (("claude", "codex"), ("gemini",), "codex"):
-            with self.subTest(exclude=exclude), patch("route.model_provider.scores") as score:
+            with self.subTest(exclude=exclude), patch("system_one_router.route.model_provider.scores") as score:
                 with self.assertRaises(ValueError):
                     route.route("Synthetic task", "", "manual", exclude=exclude)
                 score.assert_not_called()
 
     def test_cli_refuses_to_exclude_every_harness(self):
-        with patch("route.model_provider.scores") as score, contextlib.redirect_stderr(io.StringIO()), \
+        with patch("system_one_router.route.model_provider.scores") as score, contextlib.redirect_stderr(io.StringIO()), \
                 self.assertRaises(SystemExit) as error:
             route.main(["--exclude", "claude", "--exclude", "codex", "Synthetic task"])
         self.assertEqual(error.exception.code, 2)
@@ -98,7 +95,7 @@ class RouteTests(unittest.TestCase):
     def test_every_exclusion_scores_the_same_tiers_and_efforts(self):
         for exclude in ((), ("codex",), ("claude",)):
             with self.subTest(exclude=exclude), \
-                    patch("route.model_provider.scores", return_value=(scores(), {})) as score:
+                    patch("system_one_router.route.model_provider.scores", return_value=(scores(), {})) as score:
                 route.route("Synthetic task", "", "manual", exclude=exclude)
             score.assert_called_once_with("Synthetic task", route.BEHAVIORS)
         self.assertEqual({item["id"] for item in route.BEHAVIORS},
@@ -107,7 +104,7 @@ class RouteTests(unittest.TestCase):
     def test_selection_and_provider_metadata_are_logged(self):
         metadata = {"scoring_provider": "openrouter", "scoring_model": "typesafe/jev-1.13",
                     "attempts": [{"provider": "openrouter", "model": "typesafe/jev-1.13", "elapsed_ms": 1}]}
-        with patch("route.model_provider.scores", return_value=(scores(), metadata)) as score:
+        with patch("system_one_router.route.model_provider.scores", return_value=(scores(), metadata)) as score:
             model, effort, entry = route.route("Synthetic task", "/workspace", "manual")
         score.assert_called_once_with("Synthetic task", route.BEHAVIORS)
         self.assertEqual((model, effort), ("opus", "high"))
@@ -122,7 +119,7 @@ class RouteTests(unittest.TestCase):
                  (0.3, 0.5, ("opus", "high"), [])]
         for tier_score, effort_score, expected, floored in cases:
             with self.subTest(tier_score=tier_score, effort_score=effort_score):
-                with patch("route.model_provider.scores", return_value=(
+                with patch("system_one_router.route.model_provider.scores", return_value=(
                         scores(tier_score=tier_score, effort_score=effort_score), {})):
                     model, effort, entry = route.route("Synthetic task", "", "agent")
                 self.assertEqual((model, effort), expected)
@@ -134,7 +131,7 @@ class RouteTests(unittest.TestCase):
                                  ({"xhigh": 0.1, "high": 0.2, "medium": 0.5}, "medium")):
             probabilities = scores()
             probabilities.update({f"effort_{e}": value for e, value in levels.items()})
-            with self.subTest(levels=levels), patch("route.model_provider.scores", return_value=(probabilities, {})):
+            with self.subTest(levels=levels), patch("system_one_router.route.model_provider.scores", return_value=(probabilities, {})):
                 _, effort, entry = route.route("Synthetic task", "", "agent")
             self.assertEqual((effort, entry["floored"]), (expected, []))
 
@@ -142,14 +139,14 @@ class RouteTests(unittest.TestCase):
         attempts = [{"provider": "respan", "model": "span-01-free", "error": "HTTP 503", "elapsed_ms": 1},
                     {"provider": "typesafe", "model": "jev-1.13.0", "error": "TimeoutError", "elapsed_ms": 2}]
         failure = model_provider.ScoreError(attempts)
-        with patch("route.model_provider.scores", side_effect=failure):
+        with patch("system_one_router.route.model_provider.scores", side_effect=failure):
             model, effort, entry = route.route("Synthetic task", "", "agent")
         self.assertEqual((model, effort, entry["tier"]), ("sonnet", "xhigh", "routine"))
         self.assertIn("error", entry)
         self.assertEqual(entry["attempts"], attempts)
 
     def test_log_failure_does_not_block_the_selected_spawn(self):
-        with patch("route.model_provider.scores", return_value=(scores(), {})), \
+        with patch("system_one_router.route.model_provider.scores", return_value=(scores(), {})), \
                 patch.object(Path, "open", side_effect=PermissionError("unwritable log")):
             model, effort, entry = route.route("Synthetic task", "", "agent")
         self.assertEqual((model, effort), ("opus", "high"))
@@ -159,7 +156,7 @@ class RouteTests(unittest.TestCase):
 class HookTests(unittest.TestCase):
     def invoke(self, event):
         output = io.StringIO()
-        with patch("agent_hook.sys.stdin", io.StringIO(json.dumps(event))), contextlib.redirect_stdout(output):
+        with patch("system_one_router.agent_hook.sys.stdin", io.StringIO(json.dumps(event))), contextlib.redirect_stdout(output):
             status = agent_hook.main()
         self.assertEqual(status, 0)
         return output.getvalue()
@@ -168,7 +165,7 @@ class HookTests(unittest.TestCase):
         for agent_type in (None, "general-purpose", "security-reviewer"):
             with self.subTest(agent_type=agent_type):
                 call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": agent_type}
-                with patch("agent_hook.route.route", return_value=("opus", "high", {})) as pick:
+                with patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})) as pick:
                     output = json.loads(self.invoke({"tool_name": "Agent", "cwd": "/workspace", "tool_input": call}))
                 pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",))
                 self.assertEqual(output, {"systemMessage": "routed-opus-high", "hookSpecificOutput": {
@@ -178,7 +175,7 @@ class HookTests(unittest.TestCase):
     def test_selection_replaces_caller_model_and_effort_and_keeps_other_inputs(self):
         call = {"prompt": "Synthetic task", "subagent_type": "security-reviewer", "model": "sonnet",
                 "effort": "low", "description": "Example", "run_in_background": True}
-        with patch("agent_hook.route.route", return_value=("opus", "xhigh", {})):
+        with patch("system_one_router.agent_hook.route.route", return_value=("opus", "xhigh", {})):
             output = json.loads(self.invoke({"tool_name": "Agent", "tool_input": call}))
         self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
             **call, "model": "opus", "effort": "xhigh", "description": "opus-xhigh · Example"})
@@ -188,7 +185,7 @@ class HookTests(unittest.TestCase):
             call = {"prompt": "Synthetic task"}
             if incoming is not None:
                 call["description"] = incoming
-            with self.subTest(description=incoming), patch("agent_hook.route.route", return_value=("opus", "high", {})):
+            with self.subTest(description=incoming), patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})):
                 output = json.loads(self.invoke({"tool_name": "Agent", "tool_input": call}))
             self.assertEqual(output["hookSpecificOutput"]["updatedInput"]["description"], expected)
 
@@ -196,7 +193,7 @@ class HookTests(unittest.TestCase):
         for event in ({}, {"tool_name": "Read", "tool_input": {"prompt": "Synthetic task"}},
                       {"tool_name": "Agent", "tool_input": {}},
                       {"tool_name": "Agent", "tool_input": {"prompt": ""}}):
-            with self.subTest(event=event), patch("agent_hook.route.route") as pick:
+            with self.subTest(event=event), patch("system_one_router.agent_hook.route.route") as pick:
                 self.assertEqual(self.invoke(event), "")
                 pick.assert_not_called()
 
@@ -208,11 +205,10 @@ class HookTests(unittest.TestCase):
             environment.pop(name, None)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = Path(__file__).resolve().parent.parent
-            for name in ("route.py", "model_provider.py", "agent_hook.py"):
-                shutil.copyfile(source / name, root / name)
+            environment.update(PYTHONPATH=str(Path(__file__).resolve().parent.parent),
+                               XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
             result = subprocess.run(
-                [sys.executable, str(root / "agent_hook.py")],
+                [sys.executable, "-m", "system_one_router", "hook"],
                 input=json.dumps({"tool_name": "Agent", "cwd": str(root), "tool_input": call}),
                 text=True, capture_output=True, cwd=root, env=environment, timeout=5,
             )
@@ -220,7 +216,7 @@ class HookTests(unittest.TestCase):
             output = json.loads(result.stdout)
             self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
                 **call, "model": "sonnet", "effort": "xhigh", "description": "sonnet-xhigh · Example"})
-            entry = json.loads((root / "artifacts" / "beta_log.jsonl").read_text())
+            entry = json.loads((root / "state" / "system-one-router" / "beta_log.jsonl").read_text())
         self.assertIn("ScoreError", entry["error"])
         self.assertEqual([attempt["provider"] for attempt in entry["attempts"]], ["typesafe", "openrouter", "respan"])
         self.assertTrue(all(attempt["error"] == "ValueError" for attempt in entry["attempts"]))

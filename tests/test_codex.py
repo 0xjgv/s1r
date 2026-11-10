@@ -2,7 +2,6 @@ import contextlib
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,9 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import codex_run
-import model_provider
-import route
+from system_one_router import codex_run, model_provider, route
 
 
 def codex_scores(tier="judgment", effort="high", tier_score=0.9, effort_score=0.9):
@@ -33,7 +30,7 @@ class CodexRouteTests(unittest.TestCase):
 
     def test_cli_codex_json_remains_parseable_on_provider_failure(self):
         output = io.StringIO()
-        with patch("route.model_provider.scores", side_effect=model_provider.ScoreError([])), \
+        with patch("system_one_router.route.model_provider.scores", side_effect=model_provider.ScoreError([])), \
                 contextlib.redirect_stdout(output):
             status = route.main(["--exclude", "claude", "--json", "Synthetic task"])
         self.assertEqual(status, 0)
@@ -44,7 +41,7 @@ class CodexRouteTests(unittest.TestCase):
     def test_each_tier_maps_to_its_codex_model_and_logs_target(self):
         for tier, selected in (("judgment", "gpt-6-astra"), ("hard", "gpt-6.1-sol"), ("routine", "gpt-6.1-terra")):
             with self.subTest(tier=tier):
-                with patch("route.model_provider.scores", return_value=(codex_scores(tier), {})) as score:
+                with patch("system_one_router.route.model_provider.scores", return_value=(codex_scores(tier), {})) as score:
                     model, effort, entry = route.route("Synthetic task", "/workspace", "codex", exclude=("claude",))
                 self.assertEqual((model, effort, entry["tier"]), (selected, "high", tier))
                 self.assertEqual((entry["harness"], entry["exclude"]), ("codex", ["claude"]))
@@ -60,7 +57,7 @@ class CodexRouteTests(unittest.TestCase):
                  (0.3, 0.5, ("gpt-6-astra", "high"), [])]
         for tier_score, effort_score, expected, floored in cases:
             with self.subTest(tier_score=tier_score, effort_score=effort_score):
-                with patch("route.model_provider.scores", return_value=(
+                with patch("system_one_router.route.model_provider.scores", return_value=(
                         codex_scores(tier_score=tier_score, effort_score=effort_score), {})):
                     model, effort, entry = route.route("Synthetic task", "", "codex", exclude=("claude",))
                 self.assertEqual((model, effort), expected)
@@ -68,7 +65,7 @@ class CodexRouteTests(unittest.TestCase):
 
     def test_codex_provider_failure_uses_codex_fallback(self):
         attempts = [{"provider": "respan", "error": "TimeoutError"}]
-        with patch("route.model_provider.scores", side_effect=model_provider.ScoreError(attempts)):
+        with patch("system_one_router.route.model_provider.scores", side_effect=model_provider.ScoreError(attempts)):
             model, effort, entry = route.route("Synthetic task", "", "codex", exclude=("claude",))
         self.assertEqual((model, effort), ("gpt-6.1-sol", "xhigh"))
         self.assertEqual(entry["error"], "ScoreError")
@@ -77,7 +74,7 @@ class CodexRouteTests(unittest.TestCase):
 
     def test_cli_codex_json_contains_model_effort_and_tier(self):
         output = io.StringIO()
-        with patch("route.model_provider.scores", return_value=(codex_scores(), {})), \
+        with patch("system_one_router.route.model_provider.scores", return_value=(codex_scores(), {})), \
                 contextlib.redirect_stdout(output):
             status = route.main(["--exclude", "claude", "--json", "--", "- Synthetic task from a bullet list"])
         self.assertEqual(status, 0)
@@ -87,7 +84,7 @@ class CodexRouteTests(unittest.TestCase):
 
     def test_cli_claude_human_output_remains_default(self):
         output = io.StringIO()
-        with patch("route.route", return_value=("opus", "high", {"floored": []})), \
+        with patch("system_one_router.route.route", return_value=("opus", "high", {"floored": []})), \
                 contextlib.redirect_stdout(output):
             self.assertEqual(route.main(["Synthetic task"]), 0)
         self.assertEqual(output.getvalue(), "opus high\n")
@@ -101,8 +98,8 @@ class CodexLauncherTests(unittest.TestCase):
         for separator, child_status, expected_status in (([], 23, 23), (["--"], 23, 23), ([], -15, 143)):
             with self.subTest(separator=separator, child_status=child_status):
                 output, errors = io.StringIO(), io.StringIO()
-                with patch("codex_run.route.route", return_value=("gpt-6.1-terra", "medium", {})) as pick, \
-                        patch("codex_run.subprocess.run", return_value=subprocess.CompletedProcess([], child_status)) as run, \
+                with patch("system_one_router.codex_run.route.route", return_value=("gpt-6.1-terra", "medium", {})) as pick, \
+                        patch("system_one_router.codex_run.subprocess.run", return_value=subprocess.CompletedProcess([], child_status)) as run, \
                         contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
                     status = codex_run.main([prompt] + separator + options)
                 self.assertEqual(status, expected_status)
@@ -117,8 +114,8 @@ class CodexLauncherTests(unittest.TestCase):
 
     def test_missing_codex_returns_127_and_reports_stderr(self):
         output, errors = io.StringIO(), io.StringIO()
-        with patch("codex_run.route.route", return_value=("gpt-6.1-sol", "xhigh", {})), \
-                patch("codex_run.subprocess.run", side_effect=FileNotFoundError("codex")), \
+        with patch("system_one_router.codex_run.route.route", return_value=("gpt-6.1-sol", "xhigh", {})), \
+                patch("system_one_router.codex_run.subprocess.run", side_effect=FileNotFoundError("codex")), \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
             status = codex_run.main(["Synthetic task"])
         self.assertEqual(status, 127)
@@ -127,8 +124,8 @@ class CodexLauncherTests(unittest.TestCase):
 
     def test_blank_prompt_is_rejected_before_scoring_or_launching(self):
         for arguments in ([], [""], [" \t\n"]):
-            with self.subTest(arguments=arguments), patch("codex_run.route.route") as pick, \
-                    patch("codex_run.subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
+            with self.subTest(arguments=arguments), patch("system_one_router.codex_run.route.route") as pick, \
+                    patch("system_one_router.codex_run.subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     codex_run.main(arguments)
                 self.assertNotEqual(error.exception.code, 0)
@@ -146,9 +143,8 @@ class CodexLauncherTests(unittest.TestCase):
             environment.pop(name, None)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source = Path(__file__).resolve().parent.parent
-            for name in ("route.py", "model_provider.py", "codex_run.py"):
-                shutil.copyfile(source / name, root / name)
+            environment.update(PYTHONPATH=str(Path(__file__).resolve().parent.parent),
+                               XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
             executable = root / "codex"
             executable.write_text(
                 "#!" + sys.executable + "\nimport sys\n"
@@ -159,10 +155,10 @@ class CodexLauncherTests(unittest.TestCase):
             executable.chmod(0o755)
             environment["PATH"] = str(root) + os.pathsep + environment.get("PATH", "")
             result = subprocess.run(
-                [sys.executable, str(root / "codex_run.py"), prompt, "--", *options],
+                [sys.executable, "-m", "system_one_router", "codex", prompt, "--", *options],
                 capture_output=True, text=True, cwd=root, env=environment, timeout=5,
             )
-            entry = json.loads((root / "artifacts" / "beta_log.jsonl").read_text())
+            entry = json.loads((root / "state" / "system-one-router" / "beta_log.jsonl").read_text())
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual(result.stdout, "child output\n")
         self.assertIn("gpt-6.1-sol", result.stderr)

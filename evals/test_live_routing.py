@@ -28,7 +28,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import route  # noqa: E402
+from system_one_router import route  # noqa: E402
 
 CASES = [json.loads(line) for line in (Path(__file__).parent / "cases.jsonl").read_text().splitlines() if line.strip()]
 PROVIDERS = (("respan", "span-01-free"), ("typesafe", "jev-1.13.0"))
@@ -64,7 +64,7 @@ def score_all(provider: str, model: str) -> list:
         tier, effort = route.score(case["text"], route.FALLBACKS["claude"], entry)
         return {"id": case["id"], "tier": tier, "effort": effort,
                 **{k: entry[k] for k in ("p_present", "floored", "error", "attempts") if k in entry}}
-    with patch("model_provider.provider_chain", return_value=[(provider, model)]), ThreadPoolExecutor(4) as pool:
+    with patch("system_one_router.model_provider.provider_chain", return_value=[(provider, model)]), ThreadPoolExecutor(4) as pool:
         return list(pool.map(one, CASES))
 
 

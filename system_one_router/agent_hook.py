@@ -10,7 +10,7 @@ failures get Claude's fallback; non-Agent calls pass through unchanged.
 import json
 import sys
 
-import route
+from system_one_router import route
 
 
 def main() -> int:
@@ -27,6 +27,3 @@ def main() -> int:
                       "hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": routed}}))
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

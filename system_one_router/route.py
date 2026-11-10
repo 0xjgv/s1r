@@ -1,8 +1,8 @@
 """Pick the model and effort for a task or subagent with a System One scorer, or by a named role.
 
-    python3 route.py "<prompt>"   print the pick for one prompt and log it
-    python3 route.py --exclude claude --json -- "<prompt>"   print a Codex model, effort, tier, and harness
-    python3 route.py --role plan --json -- "<prompt>"   print the plan role's model, effort, and harness
+    s1r route "<prompt>"   print the pick for one prompt and log it
+    s1r route --exclude claude --json -- "<prompt>"   print a Codex model, effort, tier, and harness
+    s1r route --role plan --json -- "<prompt>"   print the plan role's model, effort, and harness
 
 One scoring call evaluates every tier and effort option. The tier takes the highest probability; the
 effort takes the highest level that reaches EFFORT_BAR. MODELS maps the tier to the first listed model
@@ -16,14 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
-import model_provider
+from system_one_router import model_provider
 
-ROOT = Path(__file__).resolve().parent
-LOG = ROOT / "artifacts" / "beta_log.jsonl"
+LOG = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "system-one-router" / "beta_log.jsonl"
 FLOOR = 0.3  # a winning tier p_present under this means no tier fit
 EFFORT_BAR = 0.5  # effort is the highest level at or above this; none means no level fit
 TIERS = {  # What makes the task hard; MODELS maps a tier to a model.
@@ -76,7 +74,7 @@ def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: s
     harness = next(h for h in models if h in allowed)
     entry.update(harness=harness, model=models[harness], effort=effort)
     try:
-        LOG.parent.mkdir(exist_ok=True)
+        LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
@@ -104,7 +102,8 @@ def score(text: str, fallback: tuple[str, str], entry: dict) -> tuple[str, str]:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="s1r route", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--exclude", action="append", default=[], choices=FALLBACKS,
                         help="Skip a harness's models; repeat to skip several (default: none)")
     parser.add_argument("--role", default="", choices=ROLES, help="Skip scoring and use this role's model and effort")
@@ -125,6 +124,3 @@ def main(argv: list[str]) -> int:
         print(f"{model} {effort}" + (f"  ({note})" if note else ""))
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "system-one-router"
+version = "0.1.0"
+description = "Pick a model and effort for Claude Code subagents and Codex tasks with a System One scorer"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+s1r = "system_one_router.cli:main"
+
+[tool.setuptools]
+packages = ["system_one_router"]

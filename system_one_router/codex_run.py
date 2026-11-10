@@ -5,11 +5,11 @@ import os
 import subprocess
 import sys
 
-import route
+from system_one_router import route
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="s1r codex", description=__doc__)
     parser.add_argument("prompt", help="Task to route and send to Codex")
     parser.add_argument("codex_args", nargs=argparse.REMAINDER, help="Additional codex exec options")
     args = parser.parse_args(argv)
@@ -30,6 +30,3 @@ def main(argv: list[str]) -> int:
         print("codex executable not found; install Codex CLI and add it to PATH", file=sys.stderr)
         return 127
 
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

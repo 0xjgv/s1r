@@ -6,20 +6,45 @@ small decision model, or look them up by role for cross-harness workers. A Claud
 before starting `codex exec`.
 Supports Respan Lite, Respan Pro, direct TypeSafe Jev, and OpenRouter System One models.
 
-Python 3.9+ and the standard library are sufficient. To execute tasks, install
+Python 3.9+ and the standard library are sufficient at runtime. To execute tasks, install
 [Claude Code](https://code.claude.com/docs/en/overview) or
 [Codex CLI](https://developers.openai.com/codex/cli) and sign in with an account
 that has access to the configured execution models.
 
-## Setup
+## Install
+
+The installer needs [uv](https://docs.astral.sh/uv/) and a POSIX shell (macOS, Linux, WSL).
+Install or update the latest release:
 
 ```sh
-git clone https://github.com/0xjgv/system-one-router.git
-cd system-one-router
-export EFFORT_ROUTER_DIR="$(pwd)"
+curl -fsSL https://raw.githubusercontent.com/0xjgv/system-one-router/main/install.sh | sh
 ```
 
-Set credentials in your environment or create a `.env` file in the repository:
+It downloads `system_one_router-<version>-py3-none-any.whl` and `checksums.txt` from
+[GitHub Releases](https://github.com/0xjgv/system-one-router/releases), verifies the
+wheel's SHA-256, keeps it under `~/.local/share/system-one-router/releases`, and installs
+it with `uv tool install`. The `s1r` command lands in uv's tool bin directory
+(`uv tool dir --bin`, usually `~/.local/bin`); put that directory on your `PATH`. Set
+`SYSTEM_ONE_ROUTER_VERSION=v0.1.0` to pin a release. Once installed, `s1r update` runs the
+latest release's installer, and `s1r update v0.1.0` installs that release. To uninstall, run
+`uv tool uninstall system-one-router`.
+
+From a source checkout, `make install` builds the wheel, packages it as a release does,
+and installs that package. `make release [BUMP=patch|minor|major]` tags the next version
+on `main` and pushes it; `.github/workflows/release.yml` tests, smoke-tests the installer,
+and publishes the assets.
+
+## Configure
+
+Configuration and logs live in your home directory, not the repository:
+
+| Path | Contents |
+|---|---|
+| `~/.config/system-one-router/.env` | Credentials and settings; the installer creates it with mode `600` |
+| `~/.local/state/system-one-router/beta_log.jsonl` | Routing records |
+
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` move them. Set credentials in your environment or
+in that `.env`:
 
 ```dotenv
 RESPAN_API_KEY=your-respan-key
@@ -28,16 +53,17 @@ OPENROUTER_API_KEY=your-openrouter-key
 ```
 
 Environment values take precedence. The `.env` reader accepts `NAME=value` lines
-with optional quotes; it does not execute shell expressions. Keep this file private;
-Git ignores it.
+with optional quotes; it does not execute shell expressions. Keep this file private.
 
 ```sh
-python3 model_provider.py check
+s1r status
 ```
 
-This checks that keys are present for every provider in the chain: direct Jev,
-OpenRouter Jev, and Respan. It prints key names, never values, and exits nonzero if a
-required key is missing. It does not contact providers or validate credentials.
+This shows the config file, `ROUTER_PROVIDER` and `ROUTER_MODEL` with where each came from
+(environment, `.env`, or default), and every provider in the order it is tried: the
+configured primary, then the fallbacks direct Jev, OpenRouter Jev, and Respan. For each it
+says whether the key is set and from where. It prints key names, never values, and exits
+nonzero if a required key is missing. It does not contact providers or validate credentials.
 
 ## Choose a scoring provider
 
@@ -50,7 +76,7 @@ Set `ROUTER_PROVIDER` and `ROUTER_MODEL` in the environment or `.env`:
 | Respan Pro | `respan` | `span-01-pro` | `RESPAN_API_KEY` |
 | OpenRouter | `openrouter` | `typesafe/jev-1.13`, or another compatible System One model ID | `OPENROUTER_API_KEY` |
 
-Omitting `ROUTER_MODEL` selects the provider's default from `model_provider.py`.
+Omitting `ROUTER_MODEL` selects the provider's default from `system_one_router/model_provider.py`.
 Set both variables when switching providers if a model is already configured.
 The `PRIMARY` and `FALLBACKS` constants in that file define the default provider chain:
 direct TypeSafe Jev → OpenRouter Jev → Respan Lite. A configured primary goes first, then
@@ -61,15 +87,15 @@ effort 0.90 vs 0.62, and p50 latency 180 vs 863 ms.
 ```sh
 # Respan Pro
 ROUTER_PROVIDER=respan ROUTER_MODEL=span-01-pro \
-  python3 route.py "Fix the flaky login test"
+  s1r route "Fix the flaky login test"
 
 # Direct Jev
 ROUTER_PROVIDER=typesafe ROUTER_MODEL=jev-1.13.0 \
-  python3 route.py "Fix the flaky login test"
+  s1r route "Fix the flaky login test"
 
 # Jev through OpenRouter; replace the model ID to try another System One model
 ROUTER_PROVIDER=openrouter ROUTER_MODEL=typesafe/jev-1.13 \
-  python3 route.py "Fix the flaky login test"
+  s1r route "Fix the flaky login test"
 ```
 
 Respan Pro requires Respan credits. OpenRouter uses its
@@ -91,9 +117,9 @@ harness in the tier's row wins. The harness is independent of the scoring provid
 | `routine`: engineering with a known approach, from a one-line edit up | `sonnet` | `gpt-6.1-terra` |
 | Fallback tier/effort | `routine` / `xhigh` | `hard` / `xhigh` |
 
-The Claude hook excludes `codex`, and `codex_run.py` excludes `claude`. With no
+The Claude hook excludes `codex`, and `s1r codex` excludes `claude`. With no
 exclusion, every tier picks Claude, because `claude` comes first in each row. Tier
-definitions, the tier table, and the fallbacks live in `route.py` (`TIERS`, `MODELS`,
+definitions, the tier table, and the fallbacks live in `system_one_router/route.py` (`TIERS`, `MODELS`,
 `FALLBACKS`). A model rename, a new harness, or a reordered row changes only the tables.
 These are initial routing rules, not validated rankings; Terra's place under `routine`
 follows the Codex model cache's description of its predecessor, gpt-5.6-terra, as a
@@ -102,7 +128,7 @@ follows the Codex model cache's description of its predecessor, gpt-5.6-terra, a
 go to `routine` at `medium`, the lowest effort the scorer picks. Both harnesses accept
 `medium`, `high`, and `xhigh`. Account access may differ.
 
-1. Score the definitions in `route.py`: three tiers and three efforts (`xhigh`, `high`,
+1. Score the definitions in `system_one_router/route.py`: three tiers and three efforts (`xhigh`, `high`,
    `medium`), the same six definitions for every caller. Respan returns
    `p_present`; TypeSafe and OpenRouter return one `noul` probability per definition.
 2. Take the highest tier score, then map the tier to the first model whose harness is
@@ -163,29 +189,27 @@ works as it does for tiers. Validation runs on another lab's model than implemen
 An advisor should come from the other harness, so a driver excludes its own for `advise`.
 
 ```sh
-python3 route.py --role plan --json -- "$(cat task.txt)"
+s1r route --role plan --json -- "$(cat task.txt)"
 # {"model": "opus", "effort": "xhigh", "role": "plan", "harness": "claude"}
-python3 route.py --role advise --exclude claude --json -- "$(cat task.txt)"
+s1r route --role advise --exclude claude --json -- "$(cat task.txt)"
 # {"model": "gpt-6-astra", "effort": "high", "role": "advise", "harness": "codex"}
 ```
 
 The rex-agents skill routes open worker launches this way. The Agent hook and
-`codex_run.py` still score. The role table lives in `route.py` (`ROLES`); its rows and
+`s1r codex` still score. The role table lives in `system_one_router/route.py` (`ROLES`); its rows and
 efforts are initial choices, not measured.
 
 ## Try Claude Code with a shell function
 
 Paste this function into a POSIX-compatible shell, Bash, or Zsh, or add it to your
-shell configuration. It uses the exported path so hooks work from other projects.
+shell configuration. The hook runs the installed command, so it works from any project.
 
 ```sh
 beta() (
-  : "${EFFORT_ROUTER_DIR:?Set EFFORT_ROUTER_DIR to the cloned repository}"
-  export EFFORT_ROUTER_DIR
   unset CLAUDE_CODE_SUBAGENT_MODEL_FORCE CLAUDE_CODE_EFFORT_LEVEL
-  python3 "$EFFORT_ROUTER_DIR/model_provider.py" check || exit
+  s1r status || exit
   claude --model opus \
-    --settings '{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"python3 \"$EFFORT_ROUTER_DIR/agent_hook.py\"","timeout":30}]}]}}' \
+    --settings '{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook","timeout":30}]}]}}' \
     "$@"
 )
 ```
@@ -213,7 +237,7 @@ The function preserves normal Claude Code permission checks. See the
 Select a Codex model and effort without launching it:
 
 ```sh
-python3 route.py --exclude claude --json -- "Explain what a Python list is"
+s1r route --exclude claude --json -- "Explain what a Python list is"
 # Example: {"model": "gpt-6.1-terra", "effort": "medium", "tier": "routine", "harness": "codex"}
 ```
 
@@ -225,7 +249,7 @@ prompt when it may start with `-`, as a task file's bullet list does.
 Launch one routed Codex task:
 
 ```sh
-python3 codex_run.py "Summarize this project's README. Do not modify files." \
+s1r codex "Summarize this project's README. Do not modify files." \
   --sandbox read-only
 ```
 
@@ -234,27 +258,15 @@ The launcher supplies `--model` and `-c model_reasoning_effort=...`; omit compet
 model or effort overrides. It forwards Codex's output and exit status, prints the
 routing decision to stderr, and preserves Codex's normal permission handling.
 
-With `EFFORT_ROUTER_DIR` exported by the setup command, add this shell function:
+Run from the project you want to work on, optionally with another scoring provider:
 
 ```sh
-codex_routed() {
-  : "${EFFORT_ROUTER_DIR:?Set EFFORT_ROUTER_DIR to the cloned repository}"
-  python3 "$EFFORT_ROUTER_DIR/codex_run.py" "$@"
-}
-```
-
-Run from the project you want to work on:
-
-```sh
-codex_routed "Summarize this project's README. Do not modify files." --sandbox read-only
-
-# Change the scoring provider while still executing with Codex
 ROUTER_PROVIDER=respan ROUTER_MODEL=span-01-pro \
-  codex_routed "Explain this project's test structure." --sandbox read-only
+  s1r codex "Explain this project's test structure." --sandbox read-only
 ```
 
 This routes the initial task, not individual Codex subagents or later turns. The
-Claude `agent_hook.py` is not a Codex hook. Native Codex subagent routing requires
+Claude hook is not a Codex hook. Native Codex subagent routing requires
 separate validation of spawn arguments, fork behavior, and model overrides. See
 [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference)
 for model and effort settings.
@@ -262,8 +274,8 @@ for model and effort settings.
 ## Tests and logs
 
 ```sh
-python3 -m unittest discover -s tests -v        # Offline tests; no API keys needed
-printf '%s\n' '{"tool_name":"Read","tool_input":{}}' | python3 agent_hook.py
+python3 -m unittest discover -s tests -v        # Offline tests; no API keys needed (or: make test)
+printf '%s\n' '{"tool_name":"Read","tool_input":{}}' | s1r hook
 ```
 
 The last command should exit successfully without output.
@@ -284,14 +296,14 @@ To test an Agent call directly, use a synthetic prompt; this makes a live scorin
 
 ```sh
 printf '%s\n' '{"tool_name":"Agent","tool_input":{"prompt":"Explain what a Python list is","subagent_type":"general-purpose"}}' \
-  | python3 agent_hook.py
-tail -n 1 "$EFFORT_ROUTER_DIR/artifacts/beta_log.jsonl"
+  | s1r hook
+tail -n 1 ~/.local/state/system-one-router/beta_log.jsonl
 ```
 
 Each routing record includes the prompt, working directory, excluded harnesses, selected tier/harness/model/effort,
 scores, and provider attempts with timing and error categories. Successful scoring
-also records `scoring_provider` and `scoring_model`. Logs stay in the repository's
-ignored `artifacts/beta_log.jsonl`; logging failure does not discard a decision.
+also records `scoring_provider` and `scoring_model`. Logs stay in
+`~/.local/state/system-one-router/beta_log.jsonl`; logging failure does not discard a decision.
 
 Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
 credentials and logs out of commits and use synthetic prompts for integration tests.
@@ -300,9 +312,11 @@ credentials and logs out of commits and use synthetic prompts for integration te
 
 | File | Purpose |
 |---|---|
-| `model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
-| `route.py` | Tier and effort definitions, the tier and role tables, fallbacks, selection, and logs |
-| `agent_hook.py` | Claude Code `PreToolUse` JSON interface |
-| `codex_run.py` | Launch a whole Codex task with the selected model and effort |
+| `system_one_router/cli.py` | The `s1r` command: `route`, `codex`, `hook`, `status`, `update`, `version` |
+| `system_one_router/model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
+| `system_one_router/route.py` | Tier and effort definitions, the tier and role tables, fallbacks, selection, and logs |
+| `system_one_router/agent_hook.py` | Claude Code `PreToolUse` JSON interface |
+| `system_one_router/codex_run.py` | Launch a whole Codex task with the selected model and effort |
+| `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml` | Packaging, the release installer, and the release pipeline |
 | `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py` | Offline provider, routing, hook, and launcher regression tests |
 | `evals/cases.jsonl`, `evals/test_live_routing.py` | Labeled synthetic routing cases and the live evals that score them |

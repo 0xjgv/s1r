@@ -1,3 +1,6 @@
 .env
 artifacts/
 __pycache__/
+dist-release/
+build/
+*.egg-info/
