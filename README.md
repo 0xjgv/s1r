@@ -20,14 +20,14 @@ Install or update the latest release:
 curl -fsSL https://raw.githubusercontent.com/0xjgv/s1r/main/install.sh | sh
 ```
 
-It downloads `system_one_router-<version>-py3-none-any.whl` and `checksums.txt` from
+It downloads `s1r-<version>-py3-none-any.whl` and `checksums.txt` from
 [GitHub Releases](https://github.com/0xjgv/s1r/releases), verifies the
-wheel's SHA-256, keeps it under `~/.local/share/system-one-router/releases`, and installs
+wheel's SHA-256, keeps it under `~/.local/share/s1r/releases`, and installs
 it with `uv tool install`. The `s1r` command lands in uv's tool bin directory
 (`uv tool dir --bin`, usually `~/.local/bin`); put that directory on your `PATH`. Set
 `SYSTEM_ONE_ROUTER_VERSION=v0.1.2` to pin a release. Once installed, `s1r update` runs the
 latest release's installer, and `s1r update v0.1.2` installs that release. To uninstall, run
-`uv tool uninstall system-one-router`.
+`uv tool uninstall s1r`.
 
 From a source checkout, `make install` builds the wheel, packages it as a release does,
 and installs that package. `make release [BUMP=patch|minor|major]` tags the next version

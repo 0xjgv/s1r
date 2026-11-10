@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         return update(rest[0] if rest else "")
     if command == "version" and not rest:
         try:
-            print(version("system-one-router"))
+            print(version("s1r"))
         except PackageNotFoundError:
             print("unknown (not installed)")
         return 0

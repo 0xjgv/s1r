@@ -1,15 +1,15 @@
 #!/bin/sh
-# Install or update system-one-router from a checksummed GitHub release.
+# Install or update s1r from a checksummed GitHub release.
 # SYSTEM_ONE_ROUTER_VERSION        release version, e.g. v0.1.2 (default: latest)
 # SYSTEM_ONE_ROUTER_DOWNLOAD_BASE  release base URL, or an absolute directory holding
 #                                  checksums.txt and the wheel (local testing)
-# SYSTEM_ONE_ROUTER_HOME           where release wheels are kept (default: $HOME/.local/share/system-one-router)
+# SYSTEM_ONE_ROUTER_HOME           where release wheels are kept (default: $HOME/.local/share/s1r)
 # When an anonymous download fails and the GitHub CLI is logged in, it downloads through `gh`.
 set -eu
 
 REPO=0xjgv/s1r
-NAME=system-one-router
-BIN=s1r
+NAME=s1r
+OLD=system-one-router  # the tool and folder name before v0.1.4
 
 die() {
     echo "$NAME install: $*" >&2
@@ -73,8 +73,8 @@ trap 'exit 1' HUP INT TERM
 fetch checksums.txt "$tmpdir/checksums.txt"
 wheel=$(awk -v version="$version" '
     {sub(/^\*/, "", $2)}
-    $2 ~ /^system_one_router-[0-9]+[.][0-9]+[.][0-9]+-py3-none-any[.]whl$/ &&
-        (version == "" || $2 == "system_one_router-" version "-py3-none-any.whl") {
+    $2 ~ /^s1r-[0-9]+[.][0-9]+[.][0-9]+-py3-none-any[.]whl$/ &&
+        (version == "" || $2 == "s1r-" version "-py3-none-any.whl") {
         found=$2; count++
     }
     END {if (count == 1) print found}
@@ -83,8 +83,15 @@ wheel=$(awk -v version="$version" '
 expected=$(awk -v name="$wheel" '{sub(/^\*/, "", $2)} $2 == name {print $1}' "$tmpdir/checksums.txt")
 fetch "$wheel" "$tmpdir/$wheel"
 [ "$(sha256 "$tmpdir/$wheel")" = "$expected" ] || die "checksum mismatch for $wheel"
-wheel_version=${wheel#system_one_router-}
+wheel_version=${wheel#s1r-}
 wheel_version=${wheel_version%-py3-none-any.whl}
+
+# Move config, logs, and kept wheels from the $OLD folders once; never overwrite.
+for root in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_STATE_HOME:-$HOME/.local/state}" "$HOME/.local/share"; do
+    if [ -d "$root/$OLD" ] && [ ! -e "$root/$NAME" ]; then
+        mv "$root/$OLD" "$root/$NAME" && echo "Moved $root/$OLD to $root/$NAME"
+    fi
+done
 
 store=${SYSTEM_ONE_ROUTER_HOME:-$HOME/.local/share/$NAME}/releases
 mkdir -p "$store"
@@ -92,33 +99,30 @@ cp "$tmpdir/$wheel" "$store/$wheel"
 
 bin_dir=$(uv tool dir --bin)
 previous=
-if [ -x "$bin_dir/$BIN" ]; then
-    previous=$("$bin_dir/$BIN" version 2>/dev/null || true)
+if [ -x "$bin_dir/$NAME" ]; then
+    previous=$("$bin_dir/$NAME" version 2>/dev/null || true)
+fi
+# The $OLD tool also provides $NAME; remove it first so uv does not keep a stale receipt.
+if uv tool list 2>/dev/null | grep -q "^$OLD "; then
+    uv tool uninstall "$OLD" >/dev/null 2>&1 || die "uv tool uninstall $OLD failed"
 fi
 uv tool install --quiet --force --python '>=3.9' "$store/$wheel" || die "uv tool install failed for $wheel"
-current=$("$bin_dir/$BIN" version 2>/dev/null) || die "installed $BIN does not run"
-[ "$current" = "$wheel_version" ] || die "installed $BIN reported an unexpected version: $current"
+current=$("$bin_dir/$NAME" version 2>/dev/null) || die "installed $NAME does not run"
+[ "$current" = "$wheel_version" ] || die "installed $NAME reported an unexpected version: $current"
 
 if [ -n "$previous" ] && [ "$previous" != "$current" ]; then
-    echo "Updated $bin_dir/$BIN: $previous -> $current"
+    echo "Updated $bin_dir/$NAME: $previous -> $current"
 else
-    echo "Installed $bin_dir/$BIN: $current"
+    echo "Installed $bin_dir/$NAME: $current"
 fi
 
-# Move config and logs from the pre-0.1.3 $NAME folders once; never overwrite.
-for root in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_STATE_HOME:-$HOME/.local/state}"; do
-    if [ -d "$root/$NAME" ] && [ ! -e "$root/$BIN" ]; then
-        mv "$root/$NAME" "$root/$BIN" && echo "Moved $root/$NAME to $root/$BIN"
-    fi
-done
-
 # Seed a private config file once; never overwrite an existing one.
-config=${XDG_CONFIG_HOME:-$HOME/.config}/$BIN/.env
+config=${XDG_CONFIG_HOME:-$HOME/.config}/$NAME/.env
 if [ ! -e "$config" ]; then
     mkdir -p "$(dirname "$config")"
     (umask 077 && printf '%s\n' '# s1r credentials; environment variables take precedence.' \
         'TYPESAFE_API_KEY=' 'OPENROUTER_API_KEY=' 'RESPAN_API_KEY=' > "$config")
-    echo "Created $config; add your keys, then run: $BIN status"
+    echo "Created $config; add your keys, then run: $NAME status"
 fi
 case :$PATH: in
 *":$bin_dir:"*) ;;

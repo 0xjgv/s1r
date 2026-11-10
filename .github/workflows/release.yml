@@ -74,5 +74,5 @@ jobs:
             fi
           else
             gh release create "$RELEASE_TAG" dist-release/* --verify-tag \
-              --title "system-one-router $RELEASE_TAG" --generate-notes
+              --title "s1r $RELEASE_TAG" --generate-notes
           fi

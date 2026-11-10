@@ -7,12 +7,12 @@ root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 cd "$root"
 out=dist-release
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
-wheel=system_one_router-$version-py3-none-any.whl
+wheel=s1r-$version-py3-none-any.whl
 
-rm -rf "$out" build system_one_router.egg-info
+rm -rf "$out" build *.egg-info
 mkdir -p "$out"
 uv build --quiet --wheel --out-dir "$out"
-rm -rf build system_one_router.egg-info
+rm -rf build *.egg-info
 [ -f "$out/$wheel" ] || { echo "release: uv build did not write $out/$wheel" >&2; exit 1; }
 rm -f "$out/.gitignore"
 cp install.sh "$out/install.sh"

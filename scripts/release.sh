@@ -44,7 +44,7 @@ else
     sed "s/^version = \".*\"$/version = \"$version\"/" pyproject.toml > pyproject.toml.tmp
     mv pyproject.toml.tmp pyproject.toml
     git commit --quiet -m "chore(release): $tag" -- pyproject.toml
-    git tag -a "$tag" -m "system-one-router $tag"
+    git tag -a "$tag" -m "s1r $tag"
     echo "Tagged $tag ($current -> $version)."
 fi
 
