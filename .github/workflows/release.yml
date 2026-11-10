@@ -40,14 +40,10 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
       - uses: astral-sh/setup-uv@v6
 
-      - name: Test
-        run: python -m unittest discover -s tests
+      - name: Test on the oldest supported Python
+        run: uv run --no-project --python 3.9 python -m unittest discover -s tests
 
       - name: Build release assets
         run: sh scripts/package-release.sh
