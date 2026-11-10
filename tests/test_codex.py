@@ -158,7 +158,7 @@ class CodexLauncherTests(unittest.TestCase):
                 [sys.executable, "-m", "system_one_router", "codex", prompt, "--", *options],
                 capture_output=True, text=True, cwd=root, env=environment, timeout=5,
             )
-            entry = json.loads((root / "state" / "system-one-router" / "beta_log.jsonl").read_text())
+            entry = json.loads((root / "state" / "s1r" / "beta_log.jsonl").read_text())
         self.assertEqual(result.returncode, 17, result.stderr)
         self.assertEqual(result.stdout, "child output\n")
         self.assertIn("gpt-6.1-sol", result.stderr)

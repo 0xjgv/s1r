@@ -50,4 +50,4 @@ fi
 
 [ "$(project_version)" = "${tag#v}" ] || die "pyproject.toml version does not match $tag"
 git push --quiet --atomic "$remote" HEAD:refs/heads/main "refs/tags/$tag"
-echo "Pushed $tag. The Release workflow publishes https://github.com/0xjgv/system-one-router/releases/tag/$tag"
+echo "Pushed $tag. The Release workflow publishes https://github.com/0xjgv/s1r/releases/tag/$tag"

@@ -9,7 +9,7 @@ This is a Python 3.9, standard-library-only router for Claude Code subagents.
 - `system_one_router/agent_hook.py`: `PreToolUse` hook that reads JSON from stdin and emits updated Agent input.
 - `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml`: packaging and releases.
 - `README.md`: setup, routing behavior, and experiment history.
-- `~/.config/system-one-router/.env`: credentials; `~/.local/state/system-one-router/beta_log.jsonl`: routing records.
+- `~/.config/s1r/.env`: credentials; `~/.local/state/s1r/beta_log.jsonl`: routing records.
 
 Offline `unittest` tests live in `tests/`. Keep changes within the existing modules unless a concrete need warrants expansion.
 
@@ -41,4 +41,4 @@ PRs should explain the behavior change, list validation commands and outcomes, a
 
 ## Security & Configuration
 
-Read `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, and `RESPAN_API_KEY` from the environment or `~/.config/system-one-router/.env`. Never commit credentials or generated logs. Prompts are sent to `api.typesafe.ai` (then OpenRouter and `api.respan.ai` on failure) and recorded locally. Live evals in `evals/` send only the synthetic cases. Use synthetic prompts for checks. Treat routing quality as experimental, as documented in `README.md`.
+Read `TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, and `RESPAN_API_KEY` from the environment or `~/.config/s1r/.env`. Never commit credentials or generated logs. Prompts are sent to `api.typesafe.ai` (then OpenRouter and `api.respan.ai` on failure) and recorded locally. Live evals in `evals/` send only the synthetic cases. Use synthetic prompts for checks. Treat routing quality as experimental, as documented in `README.md`.

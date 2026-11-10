@@ -7,8 +7,8 @@
     s1r update [VERSION]   install the latest release, or VERSION such as v0.2.0
     s1r version            print the installed version
 
-Configuration: environment variables, then ~/.config/system-one-router/.env.
-Routing log: ~/.local/state/system-one-router/beta_log.jsonl.
+Configuration: environment variables, then ~/.config/s1r/.env.
+Routing log: ~/.local/state/s1r/beta_log.jsonl.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from system_one_router import agent_hook, codex_run, model_provider, route
 
-RELEASES = "https://github.com/0xjgv/system-one-router/releases"
+RELEASES = "https://github.com/0xjgv/s1r/releases"
 
 
 def update(target: str) -> int:

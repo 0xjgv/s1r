@@ -21,7 +21,7 @@ from pathlib import Path
 
 from system_one_router import model_provider
 
-LOG = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "system-one-router" / "beta_log.jsonl"
+LOG = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "s1r" / "beta_log.jsonl"
 FLOOR = 0.3  # a winning tier p_present under this means no tier fit
 EFFORT_BAR = 0.5  # effort is the highest level at or above this; none means no level fit
 TIERS = {  # What makes the task hard; MODELS maps a tier to a model.

@@ -288,7 +288,7 @@ class HookTests(unittest.TestCase):
                 text=True, capture_output=True, cwd=root, env=environment, timeout=5,
             )
             self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
-            entry = json.loads((root / "state" / "system-one-router" / "beta_log.jsonl").read_text())
+            entry = json.loads((root / "state" / "s1r" / "beta_log.jsonl").read_text())
         self.assertEqual((entry["error"], entry["applied"]), ("ScoreError", False))
         self.assertEqual([attempt["provider"] for attempt in entry["attempts"]], ["typesafe", "openrouter", "respan"])
         self.assertTrue(all(attempt["error"] == "ValueError" for attempt in entry["attempts"]))

@@ -1,13 +1,13 @@
 #!/bin/sh
 # Install or update system-one-router from a checksummed GitHub release.
-# SYSTEM_ONE_ROUTER_VERSION        release version, e.g. v0.1.0 (default: latest)
+# SYSTEM_ONE_ROUTER_VERSION        release version, e.g. v0.1.2 (default: latest)
 # SYSTEM_ONE_ROUTER_DOWNLOAD_BASE  release base URL, or an absolute directory holding
 #                                  checksums.txt and the wheel (local testing)
 # SYSTEM_ONE_ROUTER_HOME           where release wheels are kept (default: $HOME/.local/share/system-one-router)
 # When an anonymous download fails and the GitHub CLI is logged in, it downloads through `gh`.
 set -eu
 
-REPO=0xjgv/system-one-router
+REPO=0xjgv/s1r
 NAME=system-one-router
 BIN=s1r
 
@@ -105,11 +105,18 @@ else
     echo "Installed $bin_dir/$BIN: $current"
 fi
 
+# Move config and logs from the pre-0.1.3 $NAME folders once; never overwrite.
+for root in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_STATE_HOME:-$HOME/.local/state}"; do
+    if [ -d "$root/$NAME" ] && [ ! -e "$root/$BIN" ]; then
+        mv "$root/$NAME" "$root/$BIN" && echo "Moved $root/$NAME to $root/$BIN"
+    fi
+done
+
 # Seed a private config file once; never overwrite an existing one.
-config=${XDG_CONFIG_HOME:-$HOME/.config}/$NAME/.env
+config=${XDG_CONFIG_HOME:-$HOME/.config}/$BIN/.env
 if [ ! -e "$config" ]; then
     mkdir -p "$(dirname "$config")"
-    (umask 077 && printf '%s\n' '# system-one-router credentials; environment variables take precedence.' \
+    (umask 077 && printf '%s\n' '# s1r credentials; environment variables take precedence.' \
         'TYPESAFE_API_KEY=' 'OPENROUTER_API_KEY=' 'RESPAN_API_KEY=' > "$config")
     echo "Created $config; add your keys, then run: $BIN status"
 fi

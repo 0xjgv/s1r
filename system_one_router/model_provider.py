@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ENV = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "system-one-router" / ".env"
+ENV = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "s1r" / ".env"
 PRIMARY = ("typesafe", "jev-1.13.0")  # Beat span-01-free on the live evals in evals/ (2026-10-29).
 FALLBACKS = (("typesafe", "jev-1.13.0"), ("openrouter", "typesafe/jev-1.13"), ("respan", "span-01-free"))
 TIMEOUT_S = 8  # Three attempts leave room within the example hook's 30-second timeout under normal I/O.

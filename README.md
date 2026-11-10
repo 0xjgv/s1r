@@ -1,4 +1,4 @@
-# system-one-router
+# s1r
 
 Choose a model and effort for Claude Code subagents or whole Codex tasks with a
 small decision model, or look them up by role for cross-harness workers. A Claude
@@ -17,16 +17,16 @@ The installer needs [uv](https://docs.astral.sh/uv/) and a POSIX shell (macOS, L
 Install or update the latest release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xjgv/system-one-router/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0xjgv/s1r/main/install.sh | sh
 ```
 
 It downloads `system_one_router-<version>-py3-none-any.whl` and `checksums.txt` from
-[GitHub Releases](https://github.com/0xjgv/system-one-router/releases), verifies the
+[GitHub Releases](https://github.com/0xjgv/s1r/releases), verifies the
 wheel's SHA-256, keeps it under `~/.local/share/system-one-router/releases`, and installs
 it with `uv tool install`. The `s1r` command lands in uv's tool bin directory
 (`uv tool dir --bin`, usually `~/.local/bin`); put that directory on your `PATH`. Set
-`SYSTEM_ONE_ROUTER_VERSION=v0.1.0` to pin a release. Once installed, `s1r update` runs the
-latest release's installer, and `s1r update v0.1.0` installs that release. To uninstall, run
+`SYSTEM_ONE_ROUTER_VERSION=v0.1.2` to pin a release. Once installed, `s1r update` runs the
+latest release's installer, and `s1r update v0.1.2` installs that release. To uninstall, run
 `uv tool uninstall system-one-router`.
 
 From a source checkout, `make install` builds the wheel, packages it as a release does,
@@ -40,8 +40,8 @@ Configuration and logs live in your home directory, not the repository:
 
 | Path | Contents |
 |---|---|
-| `~/.config/system-one-router/.env` | Credentials and settings; the installer creates it with mode `600` |
-| `~/.local/state/system-one-router/beta_log.jsonl` | Routing records |
+| `~/.config/s1r/.env` | Credentials and settings; the installer creates it with mode `600` |
+| `~/.local/state/s1r/beta_log.jsonl` | Routing records |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` move them. Set credentials in your environment or
 in that `.env`:
@@ -305,13 +305,13 @@ To test an Agent call directly, use a synthetic prompt; this makes a live scorin
 ```sh
 printf '%s\n' '{"tool_name":"Agent","tool_input":{"prompt":"Explain what a Python list is","subagent_type":"general-purpose"}}' \
   | s1r hook
-tail -n 1 ~/.local/state/system-one-router/beta_log.jsonl
+tail -n 1 ~/.local/state/s1r/beta_log.jsonl
 ```
 
 Each routing record includes the prompt, working directory, excluded harnesses, selected tier/harness/model/effort,
 scores, and provider attempts with timing and error categories. Successful scoring
 also records `scoring_provider` and `scoring_model`. Logs stay in
-`~/.local/state/system-one-router/beta_log.jsonl`; logging failure does not discard a decision.
+`~/.local/state/s1r/beta_log.jsonl`; logging failure does not discard a decision.
 
 Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
 credentials and logs out of commits and use synthetic prompts for integration tests.
