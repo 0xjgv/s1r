@@ -31,7 +31,7 @@ Use four-space indentation, `snake_case` functions and variables, and uppercase 
 
 No coverage threshold exists. For routing changes, add focused standard-library `unittest` tests named `tests/test_*.py`; run them with `python3 -m unittest discover -s tests`.
 
-Mock scoring and redirect logs to temporary paths. Cover low-score and API-failure fallbacks, model and effort on every Agent call with its type preserved, and empty/non-Agent pass-through. Validate emitted JSON through the hook entry point without sending private prompts to a scoring provider.
+Mock scoring and redirect logs to temporary paths. Cover low-score and API-failure fallbacks, model and effort on every Agent call that leaves them out with its type preserved, a caller's own model or effort kept, and empty/non-Agent pass-through. Validate emitted JSON through the hook entry point without sending private prompts to a scoring provider.
 
 ## Commit & Pull Request Guidelines
 

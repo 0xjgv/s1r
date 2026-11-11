@@ -58,13 +58,17 @@ BEHAVIORS = ([{"id": f"tier_{k}", "definition": v} for k, v in TIERS.items()]
 
 
 def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: str = "",
-          fallback: bool = True) -> tuple[str, str, dict]:
+          fallback: bool = True, explicit: dict | None = None) -> tuple[str, str, dict]:
     """Pick and log one prompt among the harnesses not excluded: by role if named, else by score.
-    Without fallback, a scoring failure logs the fallback pick with applied=False for the caller to skip."""
+    Without fallback, a scoring failure logs the fallback pick with applied=False for the caller to skip.
+    explicit holds the fields the caller's own input already set; it is logged beside the pick, which
+    the caller applies only to the other fields."""
     allowed = [harness for harness in FALLBACKS if harness not in exclude]
     if set(exclude) - set(FALLBACKS) or not allowed:
         raise ValueError(f"exclude must name harnesses from {list(FALLBACKS)} and leave one; got {list(exclude)}")
     entry = record(kind, cwd, text, exclude)
+    if explicit is not None:
+        entry["explicit"] = explicit
     if role:
         models, effort = ROLES[role]
         entry["role"] = role

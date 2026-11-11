@@ -236,18 +236,81 @@ class HookTests(unittest.TestCase):
                 call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": agent_type}
                 with patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})) as pick:
                     output = json.loads(self.invoke({"tool_name": "Agent", "cwd": "/workspace", "tool_input": call}))
-                pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",), fallback=False)
+                pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",), fallback=False,
+                                             explicit={})
                 self.assertEqual(output, {"systemMessage": "routed-opus-high", "hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "updatedInput": {
                         **call, "model": "opus", "effort": "high", "description": "opus-high · Example"}}})
 
-    def test_selection_replaces_caller_model_and_effort_and_keeps_other_inputs(self):
-        call = {"prompt": "Synthetic task", "subagent_type": "security-reviewer", "model": "sonnet",
-                "effort": "low", "description": "Example", "run_in_background": True}
-        with patch("system_one_router.agent_hook.route.route", return_value=("opus", "xhigh", {})):
-            output = json.loads(self.invoke({"tool_name": "Agent", "tool_input": call}))
-        self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
-            **call, "model": "opus", "effort": "xhigh", "description": "opus-xhigh · Example"})
+    def run_hook(self, fields, **scoring):
+        """Run the hook on an Agent call carrying fields, scored routine/medium unless scoring says otherwise.
+        Return the call, the hook's output (None when it prints nothing), the log record, and the scorer mock."""
+        call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": "general-purpose",
+                "run_in_background": True, **fields}
+        scoring = scoring or {"return_value": (scores("routine", "medium"), {})}
+        with patch("system_one_router.route.model_provider.scores", **scoring) as score:
+            printed = self.invoke({"tool_name": "Agent", "cwd": str(self.project), "tool_input": call})
+        return call, json.loads(printed) if printed else None, json.loads(self.log.read_text().splitlines()[-1]), score
+
+    def test_caller_model_or_effort_is_kept_and_only_the_missing_field_is_routed(self):
+        for fields, routed, label, message in (
+                ({}, {"model": "sonnet", "effort": "medium"}, "sonnet-medium", "routed-sonnet-medium"),
+                ({"model": "opus"}, {"effort": "medium"}, "opus(kept)-medium", "routed-medium kept-opus"),
+                ({"effort": "high"}, {"model": "sonnet"}, "sonnet-high(kept)", "routed-sonnet kept-high"),
+                ({"effort": "lower"}, {"model": "sonnet"}, "sonnet-lower(kept)", "routed-sonnet kept-lower"),
+                ({"effort": "higher"}, {"model": "sonnet"}, "sonnet-higher(kept)", "routed-sonnet kept-higher")):
+            with self.subTest(fields=fields):
+                call, output, entry, _ = self.run_hook(fields)
+                self.assertEqual(output, {"systemMessage": message, "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "updatedInput": {**call, **routed, "description": f"{label} · Example"}}})
+                self.assertEqual((entry["explicit"], entry["model"], entry["effort"], "applied" in entry),
+                                 (fields, "sonnet", "medium", False))
+
+    def test_call_that_sets_model_and_effort_passes_through_unscored_and_logs_why(self):
+        _, output, entry, score = self.run_hook({"model": "opus", "effort": "high"})
+        self.assertIsNone(output)
+        score.assert_not_called()
+        self.assertEqual({key: entry.get(key) for key in ("subagent_type", "explicit", "applied", "pinned", "model")}, {
+            "subagent_type": "general-purpose", "explicit": {"model": "opus", "effort": "high"},
+            "applied": False, "pinned": None, "model": None})
+
+    def test_explicit_model_on_a_pinned_agent_passes_through_and_logs_both(self):
+        agent_file(self.user_agents, "local-tester", "claude-haiku-5-5")
+        _, output, entry, score = self.run_hook({"subagent_type": "local-tester", "model": "opus"})
+        self.assertIsNone(output)
+        score.assert_not_called()
+        self.assertEqual((entry["pinned"], entry["explicit"], entry["applied"]),
+                         ("claude-haiku-5-5", {"model": "opus"}, False))
+
+    def test_explicit_model_stands_when_scoring_fails(self):
+        _, output, entry, _ = self.run_hook({"model": "opus"}, side_effect=model_provider.ScoreError([]))
+        self.assertIsNone(output)
+        self.assertEqual((entry["error"], entry["explicit"], entry["applied"]), ("ScoreError", {"model": "opus"}, False))
+
+    def test_model_the_hook_does_not_route_to_passes_through_unscored(self):
+        for model in ("haiku", "claude-opus-5-5", "OPUS", 7, True, ["opus"], {"name": "opus"}):
+            with self.subTest(model=model):
+                _, output, entry, score = self.run_hook({"model": model})
+                self.assertIsNone(output)
+                score.assert_not_called()
+                self.assertEqual((entry["explicit"], entry["applied"]), ({"model": model}, False))
+
+    def test_any_effort_the_caller_wrote_is_kept_as_written(self):
+        for effort in ("max", "ultra", 5, ["high"]):
+            with self.subTest(effort=effort):
+                call, output, entry, _ = self.run_hook({"effort": effort})
+                self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
+                    **call, "model": "sonnet", "description": f"sonnet-{effort}(kept) · Example"})
+                self.assertEqual(entry["explicit"], {"effort": effort})
+
+    def test_empty_model_or_effort_counts_as_unset(self):
+        for fields in ({"model": ""}, {"model": None}, {"effort": ""}, {"model": None, "effort": None}):
+            with self.subTest(fields=fields):
+                call, output, entry, _ = self.run_hook(fields)
+                self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
+                    **call, "model": "sonnet", "effort": "medium", "description": "sonnet-medium · Example"})
+                self.assertEqual(entry["explicit"], {})
 
     def test_description_gets_route_label_prefix_with_or_without_incoming_description(self):
         for incoming, expected in (("Fix login", "opus-high · Fix login"), ("", "opus-high"), (None, "opus-high")):

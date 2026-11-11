@@ -1,12 +1,17 @@
 """PreToolUse hook: a System One scorer picks each subagent's model and effort from its prompt.
 
 The pick goes on the Agent call's `model` and `effort` fields (Claude Code 2.1.292+); every other
-input, including the agent type, is kept. The route label <model>-<effort> is prefixed to
-`description` so the UI shows it. systemMessage shows routed-<model>-<effort> in the session UI
-only; the model never sees it. Agent calls run Claude models, so Codex is excluded. When scoring
-fails, the hook prints nothing and the call runs as written; the log marks the pick applied=False.
-An agent type whose definition file pins a model (anything but `inherit`) also passes through
-unscored, so the pin and the session's effort apply; the log records the pin with applied=False.
+input, including the agent type, is kept. The hook never replaces a `model` or `effort` the caller
+wrote on the call: it routes only the field left out, and the log's `explicit` holds what the caller
+set. The label <model>-<effort> is prefixed to `description` so the UI shows what the agent runs as,
+with `(kept)` after a caller's value: opus(kept)-high. systemMessage names who chose what, as
+routed-<model>-<effort> or routed-<effort> kept-<model>, in the session UI only; the model never
+sees it. Agent calls run Claude models, so Codex is excluded.
+
+The hook prints nothing, the call runs as written, and the log says why with applied=False when:
+scoring fails; the agent type's definition file pins a model (anything but `inherit`), so the pin and
+the session's effort apply; the caller set both fields; or the caller's `model` is not one the hook
+routes to, so no routed effort is paired with it. Only the first of these scores the prompt.
 Non-Agent calls pass through unchanged.
 """
 
@@ -18,6 +23,7 @@ from pathlib import Path
 from system_one_router import route
 
 EXCLUDE = ("codex",)
+MODELS = [models["claude"] for models in route.MODELS.values()]  # the models the hook routes to
 
 
 def pinned_model(agent_type: str, cwd: str) -> str:
@@ -50,20 +56,25 @@ def main() -> int:
     if event.get("tool_name") != "Agent" or not call.get("prompt"):
         return 0
     cwd, agent_type = event.get("cwd", ""), call.get("subagent_type")
+    explicit = {field: call[field] for field in ("model", "effort") if call.get(field)}
     pinned = pinned_model(agent_type, cwd) if agent_type else ""
-    if pinned:
+    unrouted_model = "model" in explicit and explicit["model"] not in MODELS
+    if pinned or unrouted_model or len(explicit) == 2:
         entry = route.record("agent", cwd, call["prompt"], EXCLUDE)
-        entry.update(subagent_type=agent_type, pinned=pinned, applied=False)
+        entry.update(subagent_type=agent_type, explicit=explicit, applied=False)
+        if pinned:
+            entry["pinned"] = pinned
         route.log(entry)
         return 0
-    model, effort, entry = route.route(call["prompt"], cwd, "agent", exclude=EXCLUDE, fallback=False)
+    model, effort, entry = route.route(call["prompt"], cwd, "agent", exclude=EXCLUDE, fallback=False, explicit=explicit)
     if entry.get("applied") is False:
         return 0
-    label = f"{model}-{effort}"
+    run = {"model": model, "effort": effort, **explicit}
+    label = "-".join(f"{value}(kept)" if field in explicit else value for field, value in run.items())
+    message = "-".join(["routed"] + [value for field, value in run.items() if field not in explicit])
     description = call.get("description")
-    routed = {**call, "model": model, "effort": effort,
-              "description": f"{label} · {description}" if description else label}
-    print(json.dumps({"systemMessage": f"routed-{model}-{effort}",
+    routed = {**call, **run, "description": f"{label} · {description}" if description else label}
+    print(json.dumps({"systemMessage": message + "".join(f" kept-{value}" for value in explicit.values()),
                       "hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": routed}}))
     return 0
 

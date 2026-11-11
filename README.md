@@ -160,10 +160,26 @@ Requests use an 8-second socket timeout per attempt with no retries for the same
 provider/model pair. The shell example gives the whole hook 30 seconds. Invalid configuration
 counts as a scoring failure; use `s1r status` to catch it before starting a session.
 
-The Claude hook sets the Agent call's `model` and `effort` fields and keeps every
-other input, including the agent type and its instructions. Per-call `effort` needs
-Claude Code 2.1.292 or later; forks ignore both fields, and `CLAUDE_CODE_EFFORT_LEVEL`
-overrides the routed effort. Non-Agent calls and empty prompts pass through. When every
+The Claude hook sets the Agent call's `model` and `effort` fields where the driver left
+them out and keeps every other input, including the agent type and its instructions.
+It never replaces a `model` or `effort` the driver wrote on the call, which usually
+carries a user's instruction. It routes only the other field and says so:
+
+| The call sets | The hook sets | Description prefix | System message |
+|---|---|---|---|
+| neither | `model`, `effort` | `sonnet-medium` | `routed-sonnet-medium` |
+| `model: opus` | `effort` | `opus(kept)-medium` | `routed-medium kept-opus` |
+| `effort: lower` | `model` | `sonnet-lower(kept)` | `routed-sonnet kept-lower` |
+| both, or a `model` outside the tier table | nothing | unchanged | none |
+
+An effort is kept as written, including the relative `lower` and `higher`, which Claude
+Code resolves. A model the hook does not route to (`haiku`, a full model ID) passes
+through unscored, like a call that sets both fields: the hook pairs its effort only with
+the models in the tier table. The log records these with `"applied": false`.
+
+Per-call `effort` needs Claude Code 2.1.292 or later; forks ignore both fields, and
+`CLAUDE_CODE_EFFORT_LEVEL` overrides the routed effort. Non-Agent calls and empty prompts
+pass through. When every
 provider fails, the hook prints nothing, so the Agent call runs with the model and effort the
 driver wrote; the log records the fallback it did not apply with `"applied": false`. A floored
 tier or effort still applies the fallback default. Log-write failures do not block spawning.
@@ -310,7 +326,10 @@ tail -n 1 ~/.local/state/s1r/beta_log.jsonl
 
 Each routing record includes the prompt, working directory, excluded harnesses, selected tier/harness/model/effort,
 scores, and provider attempts with timing and error categories. Successful scoring
-also records `scoring_provider` and `scoring_model`. Logs stay in
+also records `scoring_provider` and `scoring_model`. Agent records carry `explicit`, the
+`model` and `effort` the driver wrote on the call (`{}` for neither; records from before
+this field do not say). `model` and `effort` remain the router's pick, so a record whose
+`explicit.model` differs from its `model` counts a pick the driver overruled. Logs stay in
 `~/.local/state/s1r/beta_log.jsonl`; logging failure does not discard a decision.
 
 Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
