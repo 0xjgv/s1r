@@ -28,7 +28,10 @@ NEW = [
      "explicit": {}, "tool_use_id": "t6", "session_id": "s"},
     {"ts": "2026-11-13T10:00:06Z", "kind": "agent", "tier": "routine", "model": "sonnet", "effort": "xhigh",
      "explicit": {}, "error": "ScoreError", "applied": False, "tool_use_id": "t7", "session_id": "s"},
-    {"ts": "2026-11-13T10:01:00Z", "kind": "outcome", "tool_use_id": "t1", "status": "completed",
+    {"ts": "2026-11-13T10:00:07Z", "kind": "agent", "tier": "routine", "model": "sonnet", "effort": "medium",
+     "explicit": {}, "tool_use_id": "t8", "session_id": "s"},
+    {"ts": "2026-11-13T10:00:59Z", "kind": "outcome", "agent_id": "a1", "status": "stopped", "transcript": "TRANSCRIPT"},
+    {"ts": "2026-11-13T10:01:00Z", "kind": "outcome", "tool_use_id": "t1", "agent_id": "a1", "status": "completed",
      "duration_ms": 1000, "total_tokens": 100},
     {"ts": "2026-11-13T10:01:01Z", "kind": "outcome", "tool_use_id": "t2", "status": "completed",
      "duration_ms": 3000, "total_tokens": 300},
@@ -38,9 +41,17 @@ NEW = [
     {"ts": "2026-11-13T10:01:05Z", "kind": "outcome", "tool_use_id": "t6", "status": "failed", "interrupted": True},
     {"ts": "2026-11-13T10:01:06Z", "kind": "outcome", "tool_use_id": "t7", "status": "completed",
      "duration_ms": 5, "total_tokens": 5},
+    {"ts": "2026-11-13T10:01:07Z", "kind": "outcome", "tool_use_id": "t8", "agent_id": "a8", "status": "async_launched"},
+    {"ts": "2026-11-13T10:01:10Z", "kind": "outcome", "agent_id": "a8", "status": "stopped", "transcript": "TRANSCRIPT"},
+    {"ts": "2026-11-13T10:05:00Z", "kind": "outcome", "agent_id": "a8", "status": "stopped", "transcript": "MISSING"},
     {"ts": "2026-11-13T10:01:04Z", "kind": "outcome", "tool_use_id": "orphan", "status": "completed",
      "duration_ms": 99999, "total_tokens": 99999},
 ]
+
+
+def assistant(*tokens):
+    usage = dict(zip(("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"), tokens))
+    return json.dumps({"type": "assistant", "message": {"role": "assistant", "usage": usage}})
 
 
 class ReportTests(unittest.TestCase):
@@ -48,8 +59,14 @@ class ReportTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.log = Path(directory.name) / "beta_log.jsonl"
+        transcript = Path(directory.name) / "agent.jsonl"
+        transcript.write_text("\n".join([  # repeated message lines, garbage, and a trailing user turn
+            json.dumps({"type": "user", "message": {"role": "user", "content": "Synthetic task"}}),
+            assistant(2, 7988, 10155, 126), assistant(2, 7988, 10155, 126), "not json", "[]",
+            assistant(2, 280, 200, 18), json.dumps({"type": "user", "message": {"content": "result"}})]) + "\n")
+        new = json.dumps(NEW).replace("TRANSCRIPT", str(transcript)).replace("MISSING", str(transcript) + ".gone")
         self.log.write_text("\n".join([json.dumps(r) for r in OLD] + ["not json", "[]"]
-                                      + [json.dumps(r) for r in NEW]) + "\n")
+                                      + [json.dumps(r) for r in json.loads(new)]) + "\n")
         patcher = patch.object(route, "LOG", self.log)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -62,10 +79,12 @@ class ReportTests(unittest.TestCase):
 
     def test_old_and_new_rows_group_by_pick_and_join_outcomes_of_calls_run_as_picked(self):
         rows = {(row["model"], row["effort"]): row for row in json.loads(self.run_cli("--json"))}
-        self.assertEqual(rows[("sonnet", "medium")], {  # t2 and t3 ran with the caller's model or effort
-            "model": "sonnet", "effort": "medium", "picks": 6, "applied": 1.0,
-            "overrode": 0.2,  # of the 5 rows with explicit; t2 kept opus over routine's sonnet
-            "done": 1, "bg": 1, "failed": 1, "error": 0.5, "median_ms": 1000, "median_tokens": 100})
+        # t2 and t3 ran with the caller's model or effort; t8 finished in the background at its first stop,
+        # 3 s after launch with its transcript's last 500 tokens; t1's stop does not replace its foreground totals.
+        self.assertEqual(rows[("sonnet", "medium")], {
+            "model": "sonnet", "effort": "medium", "picks": 7, "applied": 1.0,
+            "overrode": 0.17,  # of the 6 rows with explicit; t2 kept opus over routine's sonnet
+            "done": 2, "bg": 1, "failed": 1, "error": 0.33, "median_ms": 2000, "median_tokens": 300})
         self.assertEqual(rows[("sonnet", "xhigh")], {  # the unapplied fallback pick did not run as picked
             "model": "sonnet", "effort": "xhigh", "picks": 1, "applied": 0.0, "overrode": 0.0,
             "done": 0, "bg": 0, "failed": 0, "error": None, "median_ms": None, "median_tokens": None})
@@ -76,14 +95,24 @@ class ReportTests(unittest.TestCase):
                          (1, 0.0, None))
         self.assertEqual(len(rows), 4)  # the manual row is not an Agent pick
 
+    def test_background_tokens_are_blank_once_the_transcript_is_gone(self):
+        records = [{"ts": "2026-11-13T10:00:00Z", "kind": "agent", "model": "sonnet", "effort": "medium",
+                    "explicit": {}, "tool_use_id": "t"},
+                   {"ts": "2026-11-13T10:00:00Z", "kind": "outcome", "tool_use_id": "t", "agent_id": "a",
+                    "status": "async_launched"},
+                   {"ts": "2026-11-13T10:00:02Z", "kind": "outcome", "agent_id": "a", "status": "stopped",
+                    "transcript": str(self.log) + ".gone"}]
+        row = report.summarize(records)[0]
+        self.assertEqual((row["done"], row["bg"], row["median_ms"], row["median_tokens"]), (1, 0, 2000, None))
+
     def test_since_drops_older_records(self):
         rows = json.loads(self.run_cli("--since", "2026-11-01", "--json"))
-        self.assertEqual([(row["model"], row["picks"]) for row in rows], [("sonnet", 5), ("opus", 1), ("sonnet", 1)])
+        self.assertEqual([(row["model"], row["picks"]) for row in rows], [("sonnet", 6), ("opus", 1), ("sonnet", 1)])
 
     def test_table_prints_a_header_and_dashes_for_missing_values(self):
         lines = self.run_cli().splitlines()
         self.assertEqual(lines[0].split(), list(report.COLUMNS))
-        self.assertEqual(lines[1].split(), ["sonnet", "medium", "6", "100%", "20%", "1", "1", "1", "50%", "1000", "100"])
+        self.assertEqual(lines[1].split(), ["sonnet", "medium", "7", "100%", "17%", "2", "1", "1", "33%", "2000", "300"])
         self.assertEqual(lines[2].split(), ["-", "-", "1", "0%", "-", "0", "0", "0", "-", "-", "-"])
 
     def test_missing_log_prints_only_the_header(self):

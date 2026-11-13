@@ -1,5 +1,5 @@
 """Agent hook: on PreToolUse a System One scorer picks each subagent's model and effort from its prompt;
-on PostToolUse and PostToolUseFailure the hook logs how the call turned out.
+on PostToolUse, PostToolUseFailure, and SubagentStop the hook logs how the call turned out.
 
 The pick goes on the Agent call's `model` and `effort` fields (Claude Code 2.1.292+); every other
 input, including the agent type, is kept. The hook never replaces a `model` or `effort` the caller
@@ -14,7 +14,9 @@ scoring fails; the agent type's definition file pins a model (anything but `inhe
 the session's effort apply; the caller set both fields; or the caller's `model` is not one the hook
 routes to, so no routed effort is paired with it. Only the first of these scores the prompt.
 Non-Agent calls pass through unchanged. Every pick record carries the call's tool_use_id and
-session_id, which join it to its outcome record. An outcome prints nothing and never blocks the call.
+session_id, which join it to its outcome record. A background call's PostToolUse fires at launch, so
+its SubagentStop record, joined by agent_id, says when it ended. An outcome prints nothing and never
+blocks the call.
 """
 
 import json
@@ -68,8 +70,19 @@ def outcome(event: dict) -> dict:
     return {key: value for key, value in entry.items() if value is not None}
 
 
+def stopped(event: dict) -> dict:
+    """The outcome record for a SubagentStop event. It keeps the agent's transcript path for the report
+    to read later: the hook runs before the agent's final message reaches the transcript."""
+    entry = {"ts": route.timestamp(), "kind": "outcome", "status": "stopped", "session_id": event.get("session_id"),
+             "agent_id": event.get("agent_id"), "transcript": event.get("agent_transcript_path")}
+    return {key: value for key, value in entry.items() if value is not None}
+
+
 def main() -> int:
     event = json.load(sys.stdin)
+    if event.get("hook_event_name") == "SubagentStop":
+        route.log(stopped(event))
+        return 0
     call = event.get("tool_input") or {}
     if event.get("tool_name") != "Agent":
         return 0

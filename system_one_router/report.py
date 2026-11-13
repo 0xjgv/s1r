@@ -6,9 +6,12 @@ picks: Agent pick records. applied: the share the hook applied (applied=False ma
 records with no pick, such as a pinned agent, count under model and effort "-"). overrode: of the
 records that log `explicit` and a tier, the share whose caller set a model other than the tier's.
 Outcome records join picks by tool_use_id and count only for calls that ran as picked: applied, with
-no model or effort of the caller's. done, bg, and failed count those outcomes that completed,
-launched in the background (no totals), and failed; error is failed over done plus failed. The
-medians cover completed outcomes. Records from before a field existed count only where they can.
+no model or effort of the caller's. A background launch joins its first SubagentStop by agent_id and
+counts as completed: its duration is the time between the two records (second resolution), its tokens
+come from the agent transcript the stop names, blank once Claude Code has deleted it. done, bg, and
+failed count completed calls, background launches with no stop logged yet, and failures; error is
+failed over done plus failed. The medians cover completed calls. Records from before a field existed
+count only where they can.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-from datetime import date
+from datetime import date, datetime
 
 from system_one_router import route
 
@@ -43,6 +46,10 @@ def read(since: str = "") -> list[dict]:
 
 def summarize(records: list[dict]) -> list[dict]:
     """One row per picked model and effort, most picks first, then by name."""
+    stops: dict = {}
+    for r in records:
+        if r.get("kind") == "outcome" and r.get("status") == "stopped" and r.get("agent_id"):
+            stops.setdefault(r["agent_id"], r)
     outcomes = {r["tool_use_id"]: r for r in records if r.get("kind") == "outcome" and r.get("tool_use_id")}
     groups: dict = {}
     for record in records:
@@ -58,7 +65,8 @@ def summarize(records: list[dict]) -> list[dict]:
             group["overrode"] += bool(explicit.get("model")) and explicit["model"] != route.MODELS[tier]["claude"]
         ran_as_picked = record.get("applied") is not False and not explicit
         if ran_as_picked and record.get("tool_use_id") in outcomes:
-            group["outcomes"].append(outcomes[record["tool_use_id"]])
+            joined = outcomes[record["tool_use_id"]]
+            group["outcomes"].append(finished(joined, stops.get(joined.get("agent_id"))))
     rows = []
     for (model, effort), group in sorted(groups.items(), key=lambda item: (-item[1]["picks"], item[0])):
         statuses = [o.get("status") for o in group["outcomes"]]
@@ -72,6 +80,40 @@ def summarize(records: list[dict]) -> list[dict]:
             "median_tokens": median(o.get("total_tokens") for o in completed),
         })
     return rows
+
+
+def finished(outcome: dict, stop: dict | None) -> dict:
+    """A background launch completed by its SubagentStop; any other outcome as logged."""
+    if outcome.get("status") != "async_launched" or not stop:
+        return outcome
+    try:
+        start, end = (datetime.strptime(r["ts"], "%Y-%m-%dT%H:%M:%SZ") for r in (outcome, stop))
+        duration = (end - start).total_seconds() * 1000
+    except (KeyError, TypeError, ValueError):
+        duration = None
+    return {**outcome, "status": "completed", "duration_ms": duration,
+            "total_tokens": final_tokens(stop.get("transcript"))}
+
+
+def final_tokens(transcript) -> int | None:
+    """Input, cache, and output tokens of the transcript's last assistant message, which is what a
+    foreground call's PostToolUse reports as totalTokens; None when the transcript cannot say."""
+    usage = None
+    try:
+        with open(transcript) as lines:
+            for line in lines:
+                try:
+                    record = json.loads(line)
+                    if record.get("type") == "assistant" and isinstance(record["message"].get("usage"), dict):
+                        usage = record["message"]["usage"]
+                except (ValueError, AttributeError, KeyError, TypeError):
+                    continue
+    except (OSError, TypeError):
+        return None
+    if usage is None:
+        return None
+    return sum(usage.get(field) or 0 for field in
+               ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
 
 
 def ratio(part: int, whole: int) -> float | None:

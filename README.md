@@ -203,7 +203,7 @@ beta() (
   unset CLAUDE_CODE_SUBAGENT_MODEL_FORCE CLAUDE_CODE_EFFORT_LEVEL
   s1r status || exit
   claude --model opus \
-    --settings '{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook","timeout":30}]}],"PostToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook"}]}],"PostToolUseFailure":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook"}]}]}}' \
+    --settings '{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook","timeout":30}]}],"PostToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook"}]}],"PostToolUseFailure":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook"}]}],"SubagentStop":[{"hooks":[{"type":"command","command":"s1r hook"}]}]}}' \
     "$@"
 )
 ```
@@ -303,19 +303,30 @@ this field do not say). `model` and `effort` remain the router's pick, so a reco
 `~/.local/state/s1r/beta_log.jsonl`; logging failure does not discard a decision.
 
 Agent records also carry the call's `tool_use_id` and `session_id` from the hook input.
-Registered for `PostToolUse` and `PostToolUseFailure` (as in `beta()` above), `s1r hook`
-appends one `"kind": "outcome"` record per Agent call with the same `tool_use_id`. It
-prints nothing, never blocks the call, and stores no prompt or result text:
+Registered for `PostToolUse`, `PostToolUseFailure`, and `SubagentStop` (as in `beta()`
+above), `s1r hook` appends `"kind": "outcome"` records: one per Agent call with the same
+`tool_use_id`, and one per subagent stop with its `agent_id`. It prints nothing, never
+blocks the call, and stores no prompt or result text:
 
 | Event | Record |
 |---|---|
 | `PostToolUse`, foreground call | `status: "completed"`, `agent_id`, `resolved_model`, `duration_ms`, `total_tokens`, `tool_uses` |
 | `PostToolUse`, background call | `status: "async_launched"`, `agent_id`, `resolved_model`; no totals, since the hook fires at launch |
 | `PostToolUseFailure` | `status: "failed"`, `interrupted`, `duration_ms` |
+| `SubagentStop` | `status: "stopped"`, `agent_id`, `transcript` (the agent's transcript path) |
 
 The fields come from `tool_response` (`totalDurationMs`, `totalTokens`, `totalToolUseCount`)
 and the failure event's `is_interrupt` and `duration_ms`, as Claude Code 2.1.323 sends them.
 Non-Agent events pass through without output or a record.
+
+A background call is finished by its first stop record with the same `agent_id`: its
+duration is the time between the launch and stop records, to the second. Its tokens are
+read from the transcript when `report` runs, not by the hook, because `SubagentStop` fires
+before the agent's final message reaches the transcript. They are the last assistant
+message's input, cache, and output tokens, the same measure as a foreground call's
+`totalTokens`, and stay blank once Claude Code deletes the transcript
+(`cleanupPeriodDays`). Foreground calls also stop; their `PostToolUse` totals win. Whether
+a background agent that errors still logs a stop, and so counts as completed, is unverified.
 
 ```sh
 s1r report [--since 2026-11-01] [--json]
@@ -324,9 +335,9 @@ s1r report [--since 2026-11-01] [--json]
 `report` reads the log and prints one row per picked model and effort: Agent picks, the
 share applied, the share the caller overrode (it set a `model` other than the scored
 tier's, counted over records that have `explicit`), and, for picks joined to outcomes of
-calls that ran as picked (applied, with no caller `model` or `effort`), completed,
-background, and failed counts, the error rate, and median duration and tokens of
-completed calls. Pass-through records with no pick (a pinned agent, a call that set
+calls that ran as picked (applied, with no caller `model` or `effort`), completed counts
+(foreground, and background with a stop), background launches with no stop yet, failed
+counts, the error rate, and median duration and tokens of completed calls. Pass-through records with no pick (a pinned agent, a call that set
 both fields) count under `-`. Older records without the new fields count where they can.
 
 Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
@@ -339,7 +350,7 @@ credentials and logs out of commits and use synthetic prompts for integration te
 | `system_one_router/cli.py` | The `s1r` command: `route`, `codex`, `hook`, `report`, `status`, `update`, `version` |
 | `system_one_router/model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
 | `system_one_router/route.py` | Tier and effort definitions, the tier table, fallbacks, selection, and logs |
-| `system_one_router/agent_hook.py` | Claude Code `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` JSON interface |
+| `system_one_router/agent_hook.py` | Claude Code `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `SubagentStop` JSON interface |
 | `system_one_router/report.py` | Summarize Agent picks and outcomes from the log |
 | `system_one_router/codex_run.py` | Launch a whole Codex task with the selected model and effort |
 | `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml` | Packaging, the release installer, and the release pipeline |

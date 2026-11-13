@@ -2,7 +2,7 @@
 
     s1r route [--exclude H] [--json] [--] <prompt>   print and log a pick
     s1r codex <prompt> [codex exec options]   run one routed Codex task
-    s1r hook               Claude Code Agent hook: route on PreToolUse, log the outcome on PostToolUse(Failure)
+    s1r hook               Claude Code Agent hook: route on PreToolUse, log outcomes on PostToolUse(Failure) and SubagentStop
     s1r report [--since YYYY-MM-DD] [--json]   summarize Agent picks and outcomes from the log
     s1r status             show settings, their sources, and the provider chain's keys
     s1r update [VERSION]   install the latest release, or VERSION such as v0.2.0

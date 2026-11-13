@@ -350,6 +350,18 @@ class HookTests(unittest.TestCase):
                 self.assertEqual(entry.pop("ts")[:2], "20")
                 self.assertEqual(entry, expected)
 
+    def test_subagent_stop_logs_the_agent_and_its_transcript_and_prints_nothing(self):
+        stop = {"session_id": "session-synthetic", "hook_event_name": "SubagentStop", "agent_id": "a1",
+                "agent_type": "general-purpose", "agent_transcript_path": "/transcripts/agent-a1.jsonl",
+                "last_assistant_message": "Synthetic reply", "stop_hook_active": False}
+        with patch("system_one_router.route.model_provider.scores") as score:
+            self.assertEqual(self.invoke(stop), "")
+        score.assert_not_called()
+        entry = json.loads(self.log.read_text())
+        entry.pop("ts")
+        self.assertEqual(entry, {"kind": "outcome", "status": "stopped", "session_id": "session-synthetic",
+                                 "agent_id": "a1", "transcript": "/transcripts/agent-a1.jsonl"})
+
     def test_non_agent_post_tool_use_is_silent_and_unlogged(self):
         for name in ("PostToolUse", "PostToolUseFailure"):
             with self.subTest(event=name):
