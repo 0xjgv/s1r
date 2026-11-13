@@ -12,7 +12,7 @@ sees it. Agent calls run Claude models, so Codex is excluded.
 The hook prints nothing, the call runs as written, and the log says why with applied=False when:
 scoring fails; the agent type's definition file pins a model (anything but `inherit`), so the pin and
 the session's effort apply; the caller set both fields; or the caller's `model` is not one the hook
-routes to, so no routed effort is paired with it. Only the first of these scores the prompt.
+routes to or `fable`, so no routed effort is paired with it. Only the first of these scores the prompt.
 Non-Agent calls pass through unchanged. Every pick record carries the call's tool_use_id and
 session_id, which join it to its outcome record. A background call's PostToolUse fires at launch, so
 its SubagentStop record, joined by agent_id, says when it ended. An outcome prints nothing and never
@@ -27,7 +27,8 @@ from pathlib import Path
 from system_one_router import route
 
 EXCLUDE = ("codex",)
-MODELS = [models["claude"] for models in route.MODELS.values()]  # the models the hook routes to
+EXPLICIT_ONLY = ["fable"]  # no tier routes here, but a caller who names it still gets a routed effort
+MODELS = [models["claude"] for models in route.MODELS.values()] + EXPLICIT_ONLY  # the models paired with an effort
 
 
 def pinned_model(agent_type: str, cwd: str) -> str:

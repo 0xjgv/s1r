@@ -29,7 +29,7 @@ class RouteTests(unittest.TestCase):
         self.addCleanup(log.stop)
 
     def test_each_tier_maps_to_its_claude_model(self):
-        cases = (("judgment", "fable"), ("hard", "opus"), ("routine", "sonnet"))
+        cases = (("judgment", "opus"), ("hard", "opus"), ("routine", "sonnet"))
         self.assertEqual(set(route.MODELS), {tier for tier, _ in cases})
         self.assertEqual(list(route.EFFORTS), ["xhigh", "high", "medium"])
         for tier, expected in cases:
@@ -37,6 +37,13 @@ class RouteTests(unittest.TestCase):
                 model, effort, entry = route.route("Synthetic task", "", "manual", exclude=("codex",))
             self.assertEqual((model, effort, entry["tier"], entry["harness"]), (expected, "medium", tier, "claude"))
             self.assertEqual(entry["floored"], [])
+
+    def test_no_tier_routes_claude_to_fable(self):
+        self.assertNotIn("fable", [models["claude"] for models in route.MODELS.values()])
+        for tier in route.TIERS:
+            with self.subTest(tier=tier), patch("system_one_router.route.model_provider.scores", return_value=(scores(tier), {})):
+                model, _, _ = route.route("Synthetic task", "", "manual", exclude=("codex",))
+            self.assertNotEqual(model, "fable")
 
     def test_cli_has_no_role_option(self):
         self.assertFalse(hasattr(route, "ROLES"))
@@ -90,7 +97,7 @@ class RouteTests(unittest.TestCase):
 
     def test_tier_floor_and_effort_bar_apply_independently(self):
         cases = [(0.2, 0.9, ("sonnet", "high"), ["tier"]),
-                 (0.9, 0.4, ("opus", "xhigh"), ["effort"]),
+                 (0.9, 0.4, ("opus", "high"), ["effort"]),
                  (0.3, 0.5, ("opus", "high"), [])]
         for tier_score, effort_score, expected, floored in cases:
             with self.subTest(tier_score=tier_score, effort_score=effort_score):
@@ -116,7 +123,7 @@ class RouteTests(unittest.TestCase):
         failure = model_provider.ScoreError(attempts)
         with patch("system_one_router.route.model_provider.scores", side_effect=failure):
             model, effort, entry = route.route("Synthetic task", "", "agent")
-        self.assertEqual((model, effort, entry["tier"]), ("sonnet", "xhigh", "routine"))
+        self.assertEqual((model, effort, entry["tier"]), ("sonnet", "high", "routine"))
         self.assertIn("error", entry)
         self.assertNotIn("applied", entry)
         self.assertEqual(entry["attempts"], attempts)
@@ -241,6 +248,19 @@ class HookTests(unittest.TestCase):
                     "updatedInput": {**call, **routed, "description": f"{label} · Example"}}})
                 self.assertEqual((entry["explicit"], entry["model"], entry["effort"], "applied" in entry),
                                  (fields, "sonnet", "medium", False))
+
+    def test_explicit_fable_is_kept_and_gets_a_routed_effort(self):
+        call, output, entry, _ = self.run_hook({"model": "fable"}, return_value=(scores("judgment", "high"), {}))
+        self.assertEqual(output, {"systemMessage": "routed-high kept-fable", "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "updatedInput": {**call, "model": "fable", "effort": "high", "description": "fable(kept)-high · Example"}}})
+        self.assertEqual((entry["explicit"], entry["tier"], entry["effort"]), ({"model": "fable"}, "judgment", "high"))
+
+    def test_judgment_prompt_without_a_model_runs_on_opus(self):
+        call, output, entry, _ = self.run_hook({}, return_value=(scores("judgment", "high"), {}))
+        self.assertEqual(output["hookSpecificOutput"]["updatedInput"], {
+            **call, "model": "opus", "effort": "high", "description": "opus-high · Example"})
+        self.assertEqual((entry["tier"], entry["model"]), ("judgment", "opus"))
 
     def test_call_that_sets_model_and_effort_passes_through_unscored_and_logs_why(self):
         _, output, entry, score = self.run_hook({"model": "opus", "effort": "high"})

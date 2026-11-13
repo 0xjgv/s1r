@@ -28,12 +28,12 @@ TIERS = {  # What makes the task hard; MODELS maps a tier to a model.
     "routine": "The task request is standard engineering whose requested steps are known and clearly solve the problem it describes, from a one-line edit or lookup to several steps, so a competent engineer finishes correctly on the first attempt, unlike a problem whose cause is unknown.",
 }
 MODELS = {  # Each tier's model per harness; the first harness not excluded wins.
-    "judgment": {"claude": "fable", "codex": "gpt-6-astra"},
+    "judgment": {"claude": "opus", "codex": "gpt-6-astra"},
     "hard": {"claude": "opus", "codex": "gpt-6.1-sol"},
     "routine": {"claude": "sonnet", "codex": "gpt-6.1-terra"},
 }
 FALLBACKS = {  # Per harness, in order: the tier and effort used when scoring fails or no option fits.
-    "claude": ("routine", "xhigh"),
+    "claude": ("routine", "high"),
     "codex": ("hard", "xhigh"),
 }
 EFFORTS = {  # What a mistake would cost, highest first; a costlier mistake also fits the levels below.

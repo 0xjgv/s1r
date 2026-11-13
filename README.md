@@ -112,10 +112,10 @@ harness in the tier's row wins. The harness is independent of the scoring provid
 
 | Tier | `claude` | `codex` |
 |---|---|---|
-| `judgment`: deciding, comparing, weighing trade-offs | `fable` | `gpt-6-astra` |
+| `judgment`: deciding, comparing, weighing trade-offs | `opus` | `gpt-6-astra` |
 | `hard`: engineering with an unknown cause or solution | `opus` | `gpt-6.1-sol` |
 | `routine`: engineering with a known approach, from a one-line edit up | `sonnet` | `gpt-6.1-terra` |
-| Fallback tier/effort for `route` and `codex` | `routine` / `xhigh` | `hard` / `xhigh` |
+| Fallback tier/effort for `route` and `codex` | `routine` / `high` | `hard` / `xhigh` |
 
 The Claude hook excludes `codex`, and `s1r codex` excludes `claude`. With no
 exclusion, every tier picks Claude, because `claude` comes first in each row. Tier
@@ -125,8 +125,9 @@ These are initial routing rules, not validated rankings; Terra's place under `ro
 follows the Codex model cache's description of its predecessor, gpt-5.6-terra, as a
 "balanced model for straightforward work"; gpt-6.1-terra's own entry says only
 "GPT-6.1 Terra Codex model." Haiku and Luna are not routed: lookups and one-line edits
-go to `routine` at `medium`, the lowest effort the scorer picks. Both harnesses accept
-`medium`, `high`, and `xhigh`. Account access may differ.
+go to `routine` at `medium`, the lowest effort the scorer picks. Fable is not routed
+either: a caller who writes `model: fable` still gets it, with a routed effort (below).
+Both harnesses accept `medium`, `high`, and `xhigh`. Account access may differ.
 
 1. Score the definitions in `system_one_router/route.py`: three tiers and three efforts (`xhigh`, `high`,
    `medium`), the same six definitions for every caller. Respan returns
@@ -170,12 +171,12 @@ carries a user's instruction. It routes only the other field and says so:
 | neither | `model`, `effort` | `sonnet-medium` | `routed-sonnet-medium` |
 | `model: opus` | `effort` | `opus(kept)-medium` | `routed-medium kept-opus` |
 | `effort: lower` | `model` | `sonnet-lower(kept)` | `routed-sonnet kept-lower` |
-| both, or a `model` outside the tier table | nothing | unchanged | none |
+| both, or a `model` outside the tier table other than `fable` | nothing | unchanged | none |
 
 An effort is kept as written, including the relative `lower` and `higher`, which Claude
 Code resolves. A model the hook does not route to (`haiku`, a full model ID) passes
 through unscored, like a call that sets both fields: the hook pairs its effort only with
-the models in the tier table. The log records these with `"applied": false`.
+the models in the tier table and `fable`. The log records these with `"applied": false`.
 
 Per-call `effort` needs Claude Code 2.1.292 or later; forks ignore both fields, and
 `CLAUDE_CODE_EFFORT_LEVEL` overrides the routed effort. Non-Agent calls and empty prompts
