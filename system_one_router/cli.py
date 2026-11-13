@@ -1,8 +1,9 @@
 """s1r: pick a model and effort for Claude Code subagents and Codex tasks.
 
-    s1r route [--exclude H] [--role R] [--json] [--] <prompt>   print and log a pick
+    s1r route [--exclude H] [--json] [--] <prompt>   print and log a pick
     s1r codex <prompt> [codex exec options]   run one routed Codex task
-    s1r hook               Claude Code PreToolUse hook: route the Agent call on stdin
+    s1r hook               Claude Code Agent hook: route on PreToolUse, log the outcome on PostToolUse(Failure)
+    s1r report [--since YYYY-MM-DD] [--json]   summarize Agent picks and outcomes from the log
     s1r status             show settings, their sources, and the provider chain's keys
     s1r update [VERSION]   install the latest release, or VERSION such as v0.2.0
     s1r version            print the installed version
@@ -22,7 +23,7 @@ import urllib.request
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from system_one_router import agent_hook, codex_run, model_provider, route
+from system_one_router import agent_hook, codex_run, model_provider, report, route
 
 RELEASES = "https://github.com/0xjgv/s1r/releases"
 
@@ -54,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
         return route.main(rest)
     if command == "codex":
         return codex_run.main(rest)
+    if command == "report":
+        return report.main(rest)
     if command == "hook" and not rest:
         return agent_hook.main()
     if command == "status" and not rest:

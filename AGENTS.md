@@ -4,9 +4,10 @@
 
 This is a Python 3.9, standard-library-only router for Claude Code subagents.
 
-- `system_one_router/cli.py`: the installed `s1r` command (`route`, `codex`, `hook`, `status`, `update`, `version`).
-- `system_one_router/route.py`: tier and role selection, scoring through `model_provider.py`, and logging.
-- `system_one_router/agent_hook.py`: `PreToolUse` hook that reads JSON from stdin and emits updated Agent input.
+- `system_one_router/cli.py`: the installed `s1r` command (`route`, `codex`, `hook`, `report`, `status`, `update`, `version`).
+- `system_one_router/route.py`: tier selection, scoring through `model_provider.py`, and logging.
+- `system_one_router/agent_hook.py`: hook that reads JSON from stdin; on `PreToolUse` it emits updated Agent input, on `PostToolUse`/`PostToolUseFailure` it logs the Agent call's outcome and prints nothing.
+- `system_one_router/report.py`: `s1r report`, picks and outcomes per model and effort from the log.
 - `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml`: packaging and releases.
 - `README.md`: setup, routing behavior, and experiment history.
 - `~/.config/s1r/.env`: credentials; `~/.local/state/s1r/beta_log.jsonl`: routing records.
@@ -31,7 +32,7 @@ Use four-space indentation, `snake_case` functions and variables, and uppercase 
 
 No coverage threshold exists. For routing changes, add focused standard-library `unittest` tests named `tests/test_*.py`; run them with `python3 -m unittest discover -s tests`.
 
-Mock scoring and redirect logs to temporary paths. Cover low-score and API-failure fallbacks, model and effort on every Agent call that leaves them out with its type preserved, a caller's own model or effort kept, and empty/non-Agent pass-through. Validate emitted JSON through the hook entry point without sending private prompts to a scoring provider.
+Mock scoring and redirect logs to temporary paths. Cover low-score and API-failure fallbacks, model and effort on every Agent call that leaves them out with its type preserved, a caller's own model or effort kept, empty/non-Agent pass-through, and Agent outcomes logged with empty stdout. Validate emitted JSON through the hook entry point without sending private prompts to a scoring provider.
 
 ## Commit & Pull Request Guidelines
 

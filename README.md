@@ -1,9 +1,9 @@
 # s1r
 
 Choose a model and effort for Claude Code subagents or whole Codex tasks with a
-small decision model, or look them up by role for cross-harness workers. A Claude
-`PreToolUse` hook updates Agent calls; the Codex launcher selects a model and effort
-before starting `codex exec`.
+small decision model. A Claude `PreToolUse` hook updates Agent calls, and its
+`PostToolUse` side logs how each call turned out; the Codex launcher selects a model
+and effort before starting `codex exec`.
 Supports Respan Lite, Respan Pro, direct TypeSafe Jev, and OpenRouter System One models.
 
 Python 3.9+ and the standard library are sufficient at runtime. To execute tasks, install
@@ -193,36 +193,6 @@ The scoring model chooses the execution model; these are separate settings.
 The shared probability format does not establish equal calibration across providers.
 Treat routing quality and the current threshold as experimental.
 
-## Route by role
-
-A driver that knows what it is delegating names the role instead of scoring the task.
-The pick needs no network call, is logged like a scored pick, and may land in either
-harness:
-
-| Role | `claude` | `codex` | Effort |
-|---|---|---|---|
-| `implement` | `opus` | **`gpt-6.1-sol`** | `xhigh` |
-| `validate` | **`opus`** | `gpt-6-astra` | `xhigh` |
-| `plan` | **`opus`** | `gpt-6.1-sol` | `xhigh` |
-| `advise` | `fable` | **`gpt-6-astra`** | `high` |
-| `research` | `sonnet` | **`gpt-6.1-terra`** | `high` |
-| `commit` | `sonnet` | **`gpt-6.1-terra`** | `medium` |
-
-Bold marks each row's first harness, the pick when nothing is excluded; `--exclude`
-works as it does for tiers. Validation runs on another lab's model than implementation.
-An advisor should come from the other harness, so a driver excludes its own for `advise`.
-
-```sh
-s1r route --role plan --json -- "$(cat task.txt)"
-# {"model": "opus", "effort": "xhigh", "role": "plan", "harness": "claude"}
-s1r route --role advise --exclude claude --json -- "$(cat task.txt)"
-# {"model": "gpt-6-astra", "effort": "high", "role": "advise", "harness": "codex"}
-```
-
-The rex-agents skill routes open worker launches this way. The Agent hook and
-`s1r codex` still score. The role table lives in `system_one_router/route.py` (`ROLES`); its rows and
-efforts are initial choices, not measured.
-
 ## Try Claude Code with a shell function
 
 Paste this function into a POSIX-compatible shell, Bash, or Zsh, or add it to your
@@ -233,7 +203,7 @@ beta() (
   unset CLAUDE_CODE_SUBAGENT_MODEL_FORCE CLAUDE_CODE_EFFORT_LEVEL
   s1r status || exit
   claude --model opus \
-    --settings '{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook","timeout":30}]}]}}' \
+    --settings '{"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook","timeout":30}]}],"PostToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook"}]}],"PostToolUseFailure":[{"matcher":"Agent","hooks":[{"type":"command","command":"s1r hook"}]}]}}' \
     "$@"
 )
 ```
@@ -332,6 +302,33 @@ this field do not say). `model` and `effort` remain the router's pick, so a reco
 `explicit.model` differs from its `model` counts a pick the driver overruled. Logs stay in
 `~/.local/state/s1r/beta_log.jsonl`; logging failure does not discard a decision.
 
+Agent records also carry the call's `tool_use_id` and `session_id` from the hook input.
+Registered for `PostToolUse` and `PostToolUseFailure` (as in `beta()` above), `s1r hook`
+appends one `"kind": "outcome"` record per Agent call with the same `tool_use_id`. It
+prints nothing, never blocks the call, and stores no prompt or result text:
+
+| Event | Record |
+|---|---|
+| `PostToolUse`, foreground call | `status: "completed"`, `agent_id`, `resolved_model`, `duration_ms`, `total_tokens`, `tool_uses` |
+| `PostToolUse`, background call | `status: "async_launched"`, `agent_id`, `resolved_model`; no totals, since the hook fires at launch |
+| `PostToolUseFailure` | `status: "failed"`, `interrupted`, `duration_ms` |
+
+The fields come from `tool_response` (`totalDurationMs`, `totalTokens`, `totalToolUseCount`)
+and the failure event's `is_interrupt` and `duration_ms`, as Claude Code 2.1.323 sends them.
+Non-Agent events pass through without output or a record.
+
+```sh
+s1r report [--since 2026-11-01] [--json]
+```
+
+`report` reads the log and prints one row per picked model and effort: Agent picks, the
+share applied, the share the caller overrode (it set a `model` other than the scored
+tier's, counted over records that have `explicit`), and, for picks joined to outcomes of
+calls that ran as picked (applied, with no caller `model` or `effort`), completed,
+background, and failed counts, the error rate, and median duration and tokens of
+completed calls. Pass-through records with no pick (a pinned agent, a call that set
+both fields) count under `-`. Older records without the new fields count where they can.
+
 Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
 credentials and logs out of commits and use synthetic prompts for integration tests.
 
@@ -339,11 +336,12 @@ credentials and logs out of commits and use synthetic prompts for integration te
 
 | File | Purpose |
 |---|---|
-| `system_one_router/cli.py` | The `s1r` command: `route`, `codex`, `hook`, `status`, `update`, `version` |
+| `system_one_router/cli.py` | The `s1r` command: `route`, `codex`, `hook`, `report`, `status`, `update`, `version` |
 | `system_one_router/model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
-| `system_one_router/route.py` | Tier and effort definitions, the tier and role tables, fallbacks, selection, and logs |
-| `system_one_router/agent_hook.py` | Claude Code `PreToolUse` JSON interface |
+| `system_one_router/route.py` | Tier and effort definitions, the tier table, fallbacks, selection, and logs |
+| `system_one_router/agent_hook.py` | Claude Code `PreToolUse`, `PostToolUse`, and `PostToolUseFailure` JSON interface |
+| `system_one_router/report.py` | Summarize Agent picks and outcomes from the log |
 | `system_one_router/codex_run.py` | Launch a whole Codex task with the selected model and effort |
 | `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml` | Packaging, the release installer, and the release pipeline |
-| `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py` | Offline provider, routing, hook, and launcher regression tests |
+| `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py`, `tests/test_report.py` | Offline provider, routing, hook, launcher, and report regression tests |
 | `evals/cases.jsonl`, `evals/test_live_routing.py` | Labeled synthetic routing cases and the live evals that score them |

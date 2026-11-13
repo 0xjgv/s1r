@@ -38,38 +38,13 @@ class RouteTests(unittest.TestCase):
             self.assertEqual((model, effort, entry["tier"], entry["harness"]), (expected, "medium", tier, "claude"))
             self.assertEqual(entry["floored"], [])
 
-    def test_each_role_picks_its_model_and_effort_without_scoring(self):
-        cases = {"implement": ("gpt-6.1-sol", "xhigh"), "validate": ("opus", "xhigh"), "plan": ("opus", "xhigh"),
-                 "advise": ("gpt-6-astra", "high"), "research": ("gpt-6.1-terra", "high"),
-                 "commit": ("gpt-6.1-terra", "medium")}
-        self.assertEqual(set(route.ROLES), set(cases))
-        for role, expected in cases.items():
-            with self.subTest(role=role), patch("system_one_router.route.model_provider.scores") as score:
-                model, effort, entry = route.route("Synthetic task", "/workspace", "manual", role=role)
-            score.assert_not_called()
-            self.assertEqual((model, effort, entry["role"]), (*expected, role))
-            self.assertNotIn("tier", entry)
-            self.assertEqual(json.loads(self.log.read_text().splitlines()[-1]), entry)
-
-    def test_every_role_resolves_under_either_exclusion(self):
-        for role, (models, _) in route.ROLES.items():
-            with self.subTest(role=role):
-                self.assertEqual(set(models), set(route.FALLBACKS))
-
-    def test_advise_goes_to_the_harness_the_driver_excludes_not(self):
-        for exclude, expected in ((("claude",), ("gpt-6-astra", "codex")), (("codex",), ("fable", "claude"))):
-            with self.subTest(exclude=exclude):
-                model, _, entry = route.route("Synthetic task", "", "manual", exclude=exclude, role="advise")
-            self.assertEqual((model, entry["harness"]), expected)
-
-    def test_cli_role_json_names_the_role_instead_of_a_tier(self):
-        output = io.StringIO()
-        with patch("system_one_router.route.model_provider.scores") as score, contextlib.redirect_stdout(output):
-            status = route.main(["--role", "plan", "--json", "--", "- Synthetic plan task"])
-        self.assertEqual(status, 0)
+    def test_cli_has_no_role_option(self):
+        self.assertFalse(hasattr(route, "ROLES"))
+        with patch("system_one_router.route.model_provider.scores") as score, \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exit:
+            route.main(["--role", "plan", "--json", "--", "Synthetic plan task"])
+        self.assertEqual(exit.exception.code, 2)
         score.assert_not_called()
-        self.assertEqual(json.loads(output.getvalue()),
-                         {"model": "opus", "effort": "xhigh", "role": "plan", "harness": "claude"})
 
     def test_without_exclusions_each_tier_takes_its_first_listed_harness(self):
         for tier, models in route.MODELS.items():
@@ -237,7 +212,7 @@ class HookTests(unittest.TestCase):
                 with patch("system_one_router.agent_hook.route.route", return_value=("opus", "high", {})) as pick:
                     output = json.loads(self.invoke({"tool_name": "Agent", "cwd": "/workspace", "tool_input": call}))
                 pick.assert_called_once_with("Synthetic task", "/workspace", "agent", exclude=("codex",), fallback=False,
-                                             explicit={})
+                                             context={"explicit": {}})
                 self.assertEqual(output, {"systemMessage": "routed-opus-high", "hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "updatedInput": {
                         **call, "model": "opus", "effort": "high", "description": "opus-high · Example"}}})
@@ -333,6 +308,54 @@ class HookTests(unittest.TestCase):
             with self.subTest(event=event), patch("system_one_router.agent_hook.route.route") as pick:
                 self.assertEqual(self.invoke(event), "")
                 pick.assert_not_called()
+
+    def test_pick_records_carry_the_call_ids_on_routed_and_pass_through_calls(self):
+        ids = {"tool_use_id": "toolu_synthetic", "session_id": "session-synthetic"}
+        for fields in ({}, {"model": "opus", "effort": "high"}):
+            with self.subTest(fields=fields), \
+                    patch("system_one_router.route.model_provider.scores", return_value=(scores("routine", "medium"), {})):
+                self.invoke({**ids, "hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": str(self.project),
+                             "tool_input": {"prompt": "Synthetic task", **fields}})
+                entry = json.loads(self.log.read_text().splitlines()[-1])
+                self.assertEqual({key: entry[key] for key in ids}, ids)
+                self.assertEqual(entry["explicit"], fields)
+
+    def post(self, response, **event):
+        return {"session_id": "session-synthetic", "hook_event_name": "PostToolUse", "tool_name": "Agent",
+                "tool_input": {"prompt": "Synthetic task", "model": "sonnet", "effort": "medium"},
+                "tool_use_id": "toolu_synthetic", "tool_response": response, **event}
+
+    def test_agent_outcomes_are_logged_and_print_nothing(self):
+        completed = {"status": "completed", "agentId": "a1", "resolvedModel": "claude-sonnet-5-5", "prompt": "Synthetic task",
+                     "content": [{"type": "text", "text": "ok"}], "totalDurationMs": 1450, "totalTokens": 17981,
+                     "totalToolUseCount": 0, "usage": {"input_tokens": 2}}
+        background = {"isAsync": True, "status": "async_launched", "agentId": "a2",
+                      "resolvedModel": "claude-sonnet-5-5", "prompt": "Synthetic task"}
+        failure = {"hook_event_name": "PostToolUseFailure", "error": "Agent type 'x' not found.", "is_interrupt": False,
+                   "duration_ms": 1}
+        ids = {"kind": "outcome", "session_id": "session-synthetic", "tool_use_id": "toolu_synthetic"}
+        for event, expected in (
+                (self.post(completed, duration_ms=1451), {**ids, "status": "completed", "agent_id": "a1",
+                                                          "resolved_model": "claude-sonnet-5-5", "duration_ms": 1450,
+                                                          "total_tokens": 17981, "tool_uses": 0}),
+                (self.post(background, duration_ms=8), {**ids, "status": "async_launched", "agent_id": "a2",
+                                                        "resolved_model": "claude-sonnet-5-5"}),
+                ({k: v for k, v in self.post({}, **failure).items() if k != "tool_response"},
+                 {**ids, "status": "failed", "interrupted": False, "duration_ms": 1}),
+                (self.post("not an object"), ids)):
+            with self.subTest(status=expected.get("status")), patch("system_one_router.route.model_provider.scores") as score:
+                self.assertEqual(self.invoke(event), "")
+                score.assert_not_called()
+                entry = json.loads(self.log.read_text().splitlines()[-1])
+                self.assertEqual(entry.pop("ts")[:2], "20")
+                self.assertEqual(entry, expected)
+
+    def test_non_agent_post_tool_use_is_silent_and_unlogged(self):
+        for name in ("PostToolUse", "PostToolUseFailure"):
+            with self.subTest(event=name):
+                self.assertEqual(self.invoke({"hook_event_name": name, "tool_name": "Read", "tool_input": {},
+                                              "tool_response": {}}), "")
+        self.assertFalse(self.log.exists())
 
     def test_hook_subprocess_without_keys_passes_through_and_logs_provider_failures(self):
         call = {"prompt": "Synthetic task", "description": "Example", "subagent_type": "general-purpose"}
