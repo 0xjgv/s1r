@@ -1,14 +1,12 @@
-"""Pick the model and effort for a task or subagent with a System One scorer, or by a named role.
+"""Pick the model and effort for a task or subagent with a System One scorer.
 
     s1r route "<prompt>"   print the pick for one prompt and log it
     s1r route --exclude claude --json -- "<prompt>"   print a Codex model, effort, tier, and harness
-    s1r route --role plan --json -- "<prompt>"   print the plan role's model, effort, and harness
 
 One scoring call evaluates every tier and effort option. The tier takes the highest probability; the
 effort takes the highest level that reaches EFFORT_BAR. MODELS maps the tier to the first listed model
 whose harness the caller did not exclude. Scoring failures, a tier under FLOOR, and no effort at
-EFFORT_BAR use the first remaining harness's fallback. A named role skips scoring: ROLES lists its
-models the same way and fixes its effort. Standard library only; Python 3.9.
+EFFORT_BAR use the first remaining harness's fallback. Standard library only; Python 3.9.
 """
 
 from __future__ import annotations
@@ -43,39 +41,25 @@ EFFORTS = {  # What a mistake would cost, highest first; a costlier mistake also
     "high": "A mistake in the task request's work would cost real rework: it changes shared code, interfaces, or behavior that other code or people depend on.",
     "medium": "A mistake in the task request's work would be cheap to notice and undo: it is read-only, local to one place, or easily reverted.",
 }
-ROLES = {  # The driver names the role, so nothing is scored: models per harness as in MODELS, then effort.
-    "implement": ({"codex": "gpt-6.1-sol", "claude": "opus"}, "xhigh"),
-    "validate": ({"claude": "opus", "codex": "gpt-6-astra"}, "xhigh"),  # another lab than the implementer
-    "plan": ({"claude": "opus", "codex": "gpt-6.1-sol"}, "xhigh"),
-    "advise": ({"codex": "gpt-6-astra", "claude": "fable"}, "high"),  # drivers exclude their own harness
-    "research": ({"codex": "gpt-6.1-terra", "claude": "sonnet"}, "high"),
-    "commit": ({"codex": "gpt-6.1-terra", "claude": "sonnet"}, "medium"),
-}
 
 
 BEHAVIORS = ([{"id": f"tier_{k}", "definition": v} for k, v in TIERS.items()]
              + [{"id": f"effort_{k}", "definition": v} for k, v in EFFORTS.items()])
 
 
-def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: str = "",
-          fallback: bool = True, explicit: dict | None = None) -> tuple[str, str, dict]:
-    """Pick and log one prompt among the harnesses not excluded: by role if named, else by score.
+def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (),
+          fallback: bool = True, context: dict | None = None) -> tuple[str, str, dict]:
+    """Score, pick, and log one prompt among the harnesses not excluded.
     Without fallback, a scoring failure logs the fallback pick with applied=False for the caller to skip.
-    explicit holds the fields the caller's own input already set; it is logged beside the pick, which
-    the caller applies only to the other fields."""
+    context holds caller fields logged beside the pick, such as the hook's explicit fields and call ids."""
     allowed = [harness for harness in FALLBACKS if harness not in exclude]
     if set(exclude) - set(FALLBACKS) or not allowed:
         raise ValueError(f"exclude must name harnesses from {list(FALLBACKS)} and leave one; got {list(exclude)}")
     entry = record(kind, cwd, text, exclude)
-    if explicit is not None:
-        entry["explicit"] = explicit
-    if role:
-        models, effort = ROLES[role]
-        entry["role"] = role
-    else:
-        tier, effort = score(text, FALLBACKS[allowed[0]], entry)
-        models = MODELS[tier]
-        entry["tier"] = tier
+    entry.update(context or {})
+    tier, effort = score(text, FALLBACKS[allowed[0]], entry)
+    models = MODELS[tier]
+    entry["tier"] = tier
     harness = next(h for h in models if h in allowed)
     entry.update(harness=harness, model=models[harness], effort=effort)
     if "error" in entry and not fallback:
@@ -86,8 +70,12 @@ def route(text: str, cwd: str, kind: str, exclude: tuple[str, ...] = (), role: s
 
 def record(kind: str, cwd: str, text: str, exclude: tuple[str, ...] = ()) -> dict:
     """Start a log entry for one prompt."""
-    return {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "kind": kind,
-            "cwd": cwd, "text": text, "exclude": list(exclude)}
+    return {"ts": timestamp(), "kind": kind, "cwd": cwd, "text": text, "exclude": list(exclude)}
+
+
+def timestamp() -> str:
+    """The current UTC time as the log writes it."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def log(entry: dict) -> None:
@@ -124,19 +112,18 @@ def main(argv: list[str]) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--exclude", action="append", default=[], choices=FALLBACKS,
                         help="Skip a harness's models; repeat to skip several (default: none)")
-    parser.add_argument("--role", default="", choices=ROLES, help="Skip scoring and use this role's model and effort")
     parser.add_argument("--json", action="store_true",
-                        help="Print a model/effort/harness JSON object with the tier or the role")
+                        help="Print a model/effort/tier/harness JSON object")
     parser.add_argument("prompt", help="Task prompt")
     args = parser.parse_args(argv)
     if not args.prompt.strip():
         parser.error("prompt must not be empty")
     try:
-        model, effort, entry = route(args.prompt, os.getcwd(), "manual", tuple(args.exclude), args.role)
+        model, effort, entry = route(args.prompt, os.getcwd(), "manual", tuple(args.exclude))
     except ValueError as err:
         parser.error(str(err))
     if args.json:
-        print(json.dumps({key: entry[key] for key in ("model", "effort", "tier", "role", "harness") if key in entry}))
+        print(json.dumps({key: entry[key] for key in ("model", "effort", "tier", "harness") if key in entry}))
     else:
         note = "Scoring failed" if "error" in entry else ",".join(entry.get("floored", []))
         print(f"{model} {effort}" + (f"  ({note})" if note else ""))
