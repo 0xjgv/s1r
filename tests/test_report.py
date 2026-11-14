@@ -105,6 +105,11 @@ class ReportTests(unittest.TestCase):
         row = report.summarize(records)[0]
         self.assertEqual((row["done"], row["bg"], row["median_ms"], row["median_tokens"]), (1, 0, 2000, None))
 
+    def test_override_compares_with_the_logged_pick_not_the_current_table(self):
+        records = [{"ts": "2026-11-12T10:00:00Z", "kind": "agent", "tier": "judgment", "model": "fable", "effort": "high",
+                    "explicit": {"model": model}} for model in ("fable", "fable", "opus")]
+        self.assertEqual(report.summarize(records)[0]["overrode"], 0.33)  # only the explicit opus overrode fable
+
     def test_since_drops_older_records(self):
         rows = json.loads(self.run_cli("--since", "2026-11-01", "--json"))
         self.assertEqual([(row["model"], row["picks"]) for row in rows], [("sonnet", 6), ("opus", 1), ("sonnet", 1)])

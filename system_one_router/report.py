@@ -60,9 +60,9 @@ def summarize(records: list[dict]) -> list[dict]:
         group["picks"] += 1
         group["applied"] += record.get("applied") is not False
         explicit, tier = record.get("explicit"), record.get("tier")
-        if isinstance(explicit, dict) and tier in route.MODELS:
+        if isinstance(explicit, dict) and tier in route.MODELS and record.get("model"):
             group["known"] += 1
-            group["overrode"] += bool(explicit.get("model")) and explicit["model"] != route.MODELS[tier]["claude"]
+            group["overrode"] += bool(explicit.get("model")) and explicit["model"] != record["model"]
         ran_as_picked = record.get("applied") is not False and not explicit
         if ran_as_picked and record.get("tool_use_id") in outcomes:
             joined = outcomes[record["tool_use_id"]]
