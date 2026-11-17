@@ -20,6 +20,7 @@ RECORDS = [
     {"ts": "t4", "kind": "agent", "text": "Synthetic E", "tier": "routine", "model": "sonnet", "effort": "xhigh",
      "error": "ScoreError", "applied": False, "explicit": {"model": "sonnet"}},  # fallback pick is not compared
     {"ts": "t5", "kind": "agent", "text": "Synthetic F", "tier": "routine", "explicit": {}},
+    {"ts": "t7", "kind": "agent", "text": "Synthetic H", "tier": "routine", "explicit": {"effort": ["high"]}},  # kept as written
     {"ts": "t6", "kind": "manual", "text": "Synthetic G", "explicit": {"model": "opus"}},
 ]
 
@@ -44,7 +45,7 @@ class LearnTests(unittest.TestCase):
             "compared with the logged pick: tier 2, effort 1; 2 disagreed:",
             "  a: picked tier routine, caller wrote {'model': 'opus'}",
             "  t1: picked effort high, caller wrote {'model': 'sonnet', 'effort': 'low'}",
-            "skipped 1: relative effort or a model outside the tier table",
+            "skipped 2: relative effort or a model outside the tier table",
         ])
 
     def test_learn_without_a_log_writes_no_cases(self):

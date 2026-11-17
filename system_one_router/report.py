@@ -149,8 +149,9 @@ def labels(explicit: dict) -> dict:
     tiers = [tier for tier, models in route.MODELS.items() if models["claude"] == explicit.get("model")]
     if tiers:
         case.update(tier=tiers[0], **({"also_tier": tiers[1:]} if tiers[1:] else {}))
-    if explicit.get("effort") in EFFORT_LABELS:
-        case["effort"] = EFFORT_LABELS[explicit["effort"]]
+    effort = explicit.get("effort")
+    if isinstance(effort, str) and effort in EFFORT_LABELS:  # the hook keeps any value the caller wrote
+        case["effort"] = EFFORT_LABELS[effort]
     return case
 
 
