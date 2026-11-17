@@ -84,17 +84,17 @@ class OutcomeTests(unittest.TestCase):
     def test_calls_join_the_latest_task_whose_worktree_holds_their_cwd(self):
         joined = json.loads(self.run_cli("--json")[0])
         self.assertEqual(joined, {"matched": 3, "unmatched": 4, "rows": [
-            {"model": "sonnet", "effort": "medium", "calls": 4, "tasks": 1, "done": 1, "median_cycle_min": 120,
+            {"model": "sonnet", "effort": "medium", "calls": 4, "matched": 2, "tasks": 1, "done": 1, "median_cycle_min": 120,
              "reworks": 2, "blocks": 1},
-            {"model": "opus", "effort": "high", "calls": 3, "tasks": 1, "done": 0, "median_cycle_min": None,
+            {"model": "opus", "effort": "high", "calls": 3, "matched": 1, "tasks": 1, "done": 0, "median_cycle_min": None,
              "reworks": 1, "blocks": 0},
         ]})
 
     def test_table_ends_with_the_matched_and_unmatched_counts(self):
         lines = self.run_cli()[0].splitlines()
         self.assertEqual(lines[0].split(), list(report.OUTCOME_COLUMNS))
-        self.assertEqual(lines[1].split(), ["sonnet", "medium", "4", "1", "1", "120", "2", "1"])
-        self.assertEqual(lines[2].split(), ["opus", "high", "3", "1", "0", "-", "1", "0"])
+        self.assertEqual(lines[1].split(), ["sonnet", "medium", "4", "2", "1", "1", "120", "2", "1"])
+        self.assertEqual(lines[2].split(), ["opus", "high", "3", "1", "1", "0", "-", "1", "0"])
         self.assertEqual(lines[-1], "matched 3 calls, unmatched 4")
 
     def test_missing_ledger_command_leaves_every_call_unmatched(self):

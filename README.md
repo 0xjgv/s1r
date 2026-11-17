@@ -364,7 +364,7 @@ s1r report --outcomes [--since 2026-11-01] [--json]
 ledgers under `~/.local/state/cos/*/`, read-only through `ledger board --all --json` and `ledger
 stats --json`. A call joins the task open at the call (created at or before it, not ended before it)
 whose `worktree` field holds the call's `cwd`: the deepest worktree, then the latest task. Per routed
-model and effort it prints calls, tasks touched, how many of them are done, their median cycle time in
+model and effort it prints calls, matched calls, tasks touched, how many of them are done, their median cycle time in
 minutes (done tasks only), and their
 reworks and blocks summed, then the matched and unmatched call counts. A missing `ledger` command or
 a ledger that fails is noted on stderr and its calls count as unmatched. Only calls made inside a

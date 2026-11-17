@@ -17,10 +17,10 @@ count only where they can.
 (every directory under ~/.local/state/cos, read through `ledger board --all --json` and `ledger stats
 --json`) open at the call (created at or before it, not ended before it) whose `worktree` field holds
 the call's cwd: the deepest worktree, then the task created last. Per routed model and effort it
-prints calls, tasks touched, how many of those tasks are done, their median cycle time in minutes
-(done tasks only: an open task's cycle still grows and a dropped one did not ship), and their
-reworks and blocks summed. A task touched by two picks counts under both. The
-matched and unmatched call counts follow the table.
+prints calls, the calls matched to a task, tasks touched, how many of those tasks are done, their
+median cycle time in minutes (done tasks only: an open task's cycle still grows and a dropped one
+did not ship), and their reworks and blocks summed. A task touched by two picks counts under both.
+The matched and unmatched call totals follow the table.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from system_one_router import route
 
 EFFORT_LABELS = {"low": "medium", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}  # clamped to EFFORTS
 COS = route.LOG.parent.parent / "cos"
-OUTCOME_COLUMNS = ("model", "effort", "calls", "tasks", "done", "median_cycle_min", "reworks", "blocks")
+OUTCOME_COLUMNS = ("model", "effort", "calls", "matched", "tasks", "done", "median_cycle_min", "reworks", "blocks")
 COLUMNS = ("model", "effort", "picks", "applied", "overrode", "done", "bg", "failed", "error",
            "median_ms", "median_tokens")
 
@@ -154,20 +154,21 @@ def task_outcomes(records: list[dict], tasks: list[dict]) -> dict:
     groups: dict = {}
     matched = unmatched = 0
     for record in filter(ran_as_picked, records):
-        group = groups.setdefault((record.get("model") or "-", record.get("effort") or "-"), {"calls": 0, "tasks": {}})
+        group = groups.setdefault((record.get("model") or "-", record.get("effort") or "-"), {"calls": 0, "matched": 0, "tasks": {}})
         group["calls"] += 1
         task = task_for(record.get("cwd"), str(record.get("ts", "")), tasks)
         if task is None:
             unmatched += 1
             continue
         matched += 1
+        group["matched"] += 1
         group["tasks"][task["key"]] = task
     rows = []
     for (model, effort), group in sorted(groups.items(), key=lambda item: (-item[1]["calls"], item[0])):
         touched = list(group["tasks"].values())
         done = [task for task in touched if task.get("state") == "done"]
         cycle = median(task.get("cycle_s") for task in done)
-        rows.append({"model": model, "effort": effort, "calls": group["calls"], "tasks": len(touched),
+        rows.append({"model": model, "effort": effort, "calls": group["calls"], "matched": group["matched"], "tasks": len(touched),
                      "done": len(done), "median_cycle_min": None if cycle is None else cycle / 60,
                      "reworks": sum(task.get("reworks") or 0 for task in touched),
                      "blocks": sum(task.get("blocks") or 0 for task in touched)})
