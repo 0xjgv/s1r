@@ -15,10 +15,11 @@ count only where they can.
 
 --outcomes joins the same calls to lead tasks instead: a call belongs to the task in a cos ledger
 (every directory under ~/.local/state/cos, read through `ledger board --all --json` and `ledger stats
---json`) created at or before the call whose `worktree` field holds the call's cwd: the deepest worktree, then
-the task created last. Per routed model and effort it prints calls, tasks touched, how many of
-those tasks ended, their median cycle time in minutes (ended tasks only: an open task's cycle still
-grows), and their reworks and blocks summed. A task touched by two picks counts under both. The
+--json`) open at the call (created at or before it, not ended before it) whose `worktree` field holds
+the call's cwd: the deepest worktree, then the task created last. Per routed model and effort it
+prints calls, tasks touched, how many of those tasks are done, their median cycle time in minutes
+(done tasks only: an open task's cycle still grows and a dropped one did not ship), and their
+reworks and blocks summed. A task touched by two picks counts under both. The
 matched and unmatched call counts follow the table.
 """
 
@@ -31,12 +32,13 @@ import statistics
 import subprocess
 import sys
 from datetime import date, datetime
+from pathlib import Path
 
 from system_one_router import route
 
 EFFORT_LABELS = {"low": "medium", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}  # clamped to EFFORTS
 COS = route.LOG.parent.parent / "cos"
-OUTCOME_COLUMNS = ("model", "effort", "calls", "tasks", "ended", "median_cycle_min", "reworks", "blocks")
+OUTCOME_COLUMNS = ("model", "effort", "calls", "tasks", "done", "median_cycle_min", "reworks", "blocks")
 COLUMNS = ("model", "effort", "picks", "applied", "overrode", "done", "bg", "failed", "error",
            "median_ms", "median_tokens")
 
@@ -118,11 +120,14 @@ def ledger_json(directory: Path, *args: str):
 def ledger_tasks() -> list[dict]:
     """Every task with a worktree in every ledger under COS, with its stats merged in."""
     tasks = []
+    if not COS.is_dir():
+        print(f"s1r report: no ledgers: {COS} is not a directory", file=sys.stderr)
     for directory in sorted(COS.glob("*/")) if COS.is_dir() else []:
         if not (directory / "events.jsonl").exists():
             continue
-        board, stats = ledger_json(directory, "board", "--all"), ledger_json(directory, "stats")
-        if not isinstance(board, dict) or not isinstance(stats, dict):
+        board = ledger_json(directory, "board", "--all")
+        stats = ledger_json(directory, "stats") if isinstance(board, dict) else None
+        if not isinstance(stats, dict):
             continue
         by_id = {task.get("id"): task for task in stats.get("tasks", [])}
         for task in board.get("tasks", []):
@@ -134,11 +139,12 @@ def ledger_tasks() -> list[dict]:
 
 
 def task_for(cwd, ts: str, tasks: list[dict]) -> dict | None:
-    """Of the tasks created at or before ts whose worktree holds cwd, the deepest worktree's latest task."""
+    """Of the tasks open at ts (created at or before it, not ended before it) whose worktree holds cwd,
+    the deepest worktree's latest task."""
     if not cwd:
         return None
     cwd = os.path.normpath(cwd)
-    holding = [task for task in tasks if task["created"] <= ts
+    holding = [task for task in tasks if task["created"] <= ts <= (task.get("ended") or ts)
                and (cwd == task["worktree"] or cwd.startswith(task["worktree"].rstrip(os.sep) + os.sep))]
     return max(holding, key=lambda task: (len(task["worktree"]), task["created"]), default=None)
 
@@ -159,10 +165,10 @@ def task_outcomes(records: list[dict], tasks: list[dict]) -> dict:
     rows = []
     for (model, effort), group in sorted(groups.items(), key=lambda item: (-item[1]["calls"], item[0])):
         touched = list(group["tasks"].values())
-        ended = [task for task in touched if task.get("ended")]
-        cycle = median(task.get("cycle_s") for task in ended)
+        done = [task for task in touched if task.get("state") == "done"]
+        cycle = median(task.get("cycle_s") for task in done)
         rows.append({"model": model, "effort": effort, "calls": group["calls"], "tasks": len(touched),
-                     "ended": len(ended), "median_cycle_min": None if cycle is None else cycle / 60,
+                     "done": len(done), "median_cycle_min": None if cycle is None else cycle / 60,
                      "reworks": sum(task.get("reworks") or 0 for task in touched),
                      "blocks": sum(task.get("blocks") or 0 for task in touched)})
     return {"rows": rows, "matched": matched, "unmatched": unmatched}
@@ -281,7 +287,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="s1r report", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--since", type=date.fromisoformat, help="Only records on or after this date (YYYY-MM-DD)")
-    parser.add_argument("--json", action="store_true", help="Print the rows as a JSON array")
+    parser.add_argument("--json", action="store_true", help="Print the rows as a JSON array (with --outcomes, an object of rows and counts)")
     parser.add_argument("--outcomes", action="store_true", help="Join calls to cos ledger tasks by worktree")
     args = parser.parse_args(argv)
     records = read(args.since.isoformat() if args.since else "")
