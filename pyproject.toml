@@ -15,3 +15,6 @@ s1r = "system_one_router.cli:main"
 
 [tool.setuptools]
 packages = ["system_one_router"]
+
+[tool.setuptools.package-data]
+system_one_router = ["install.sh"]

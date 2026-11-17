@@ -8,7 +8,8 @@ This is a Python 3.9, standard-library-only router for Claude Code subagents.
 - `system_one_router/route.py`: tier selection, scoring through `model_provider.py`, and logging.
 - `system_one_router/agent_hook.py`: hook that reads JSON from stdin; on `PreToolUse` it emits updated Agent input, on `PostToolUse`/`PostToolUseFailure`/`SubagentStop` it logs the Agent call's outcome and prints nothing.
 - `system_one_router/report.py`: `s1r report`, picks and outcomes per model and effort from the log; `s1r learn`, caller-labeled eval cases from the log.
-- `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml`: packaging and releases.
+- `system_one_router/signature.py`: standard-library minisign verification; `s1r update` uses it to check the release signature.
+- `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml`: packaging and releases. `system_one_router/install.sh` is a symlink to `install.sh` so the wheel bundles it.
 - `README.md`: setup, routing behavior, and experiment history.
 - `~/.config/s1r/.env`: credentials; `~/.local/state/s1r/beta_log.jsonl`: routing records.
 

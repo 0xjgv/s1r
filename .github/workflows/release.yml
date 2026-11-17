@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to (re)publish, e.g. v0.1.0
+        description: Existing release tag to (re)build into a draft, e.g. v0.1.0
         required: true
 
 permissions:
@@ -17,30 +17,34 @@ concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
-  release:
+  build:
+    # Supply-chain guard: only the repository owner can start or re-run a release.
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: write
-    env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Check that the tag is on main and matches pyproject.toml
+        id: version
         run: |
           git merge-base --is-ancestor HEAD origin/main
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
           echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
           test "$RELEASE_TAG" = "v$version"
-          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
 
       - name: Test on the oldest supported Python
         run: uv run --no-project --python 3.9 python -m unittest discover -s tests
@@ -49,30 +53,117 @@ jobs:
         run: sh scripts/package-release.sh
 
       - name: Smoke-test the installer against the assets
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           export UV_TOOL_DIR="$RUNNER_TEMP/uv-tools" UV_TOOL_BIN_DIR="$RUNNER_TEMP/bin"
           export SYSTEM_ONE_ROUTER_HOME="$RUNNER_TEMP/share" XDG_CONFIG_HOME="$RUNNER_TEMP/config"
           SYSTEM_ONE_ROUTER_DOWNLOAD_BASE="$PWD/dist-release" SYSTEM_ONE_ROUTER_VERSION="$RELEASE_TAG" sh install.sh
           test "$("$UV_TOOL_BIN_DIR/s1r" version)" = "$RELEASE_VERSION"
 
-      - name: Publish the release (idempotent)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: s1r-release
+          path: dist-release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    # Holds MINISIGN_SECRET_KEY; no other job can read it.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: s1r-release
+          path: dist-release
+      - name: Sign checksums.txt
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          test -n "$MINISIGN_SECRET_KEY" || { echo "MINISIGN_SECRET_KEY is not set in the release environment" >&2; exit 1; }
+          sudo apt-get update -q
+          sudo apt-get install -y -q minisign
+          key="$RUNNER_TEMP/minisign.key"
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          minisign -S -s "$key" -m dist-release/checksums.txt -t "s1r $RELEASE_TAG"
+          rm -f "$key"
+          # The installer's embedded key must accept the signature before anything is uploaded.
+          minisign -V -P "$(sed -n 's/^PUBLIC_KEY=//p' dist-release/install.sh)" -m dist-release/checksums.txt
+      - name: Create or update the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            have=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
-            for asset in dist-release/*; do
-              printf '%s\n' "$have" | grep -qx "$(basename "$asset")" || missing=1
-            done
-            if [ -n "${missing:-}" ]; then
-              # Replace the whole set so checksums.txt always matches the wheel.
-              gh release upload "$RELEASE_TAG" dist-release/* --clobber
-              echo "Release $RELEASE_TAG existed with missing assets; uploaded a consistent set."
-            else
-              echo "Release $RELEASE_TAG is already published with every asset."
-            fi
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true || {
+              echo "Release $RELEASE_TAG is already published; assets will not be replaced." >&2
+              exit 1
+            }
+            gh release upload "$RELEASE_TAG" dist-release/* --clobber
           else
-            gh release create "$RELEASE_TAG" dist-release/* --verify-tag \
+            gh release create "$RELEASE_TAG" dist-release/* --verify-tag --draft \
               --title "s1r $RELEASE_TAG" --generate-notes
           fi
+
+  verify:
+    needs: [build, draft]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Draft releases are only visible to tokens that can write.
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      SYSTEM_ONE_ROUTER_HOME: ${{ github.workspace }}/share
+      XDG_CONFIG_HOME: ${{ github.workspace }}/config
+    steps:
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - name: Install minisign
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q minisign
+      - name: Download the draft release
+        run: |
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/draft"
+          echo "SYSTEM_ONE_ROUTER_DOWNLOAD_BASE=$RUNNER_TEMP/draft" >> "$GITHUB_ENV"
+          echo "SYSTEM_ONE_ROUTER_VERSION=$RELEASE_TAG" >> "$GITHUB_ENV"
+      - name: Install with the draft's install.sh (minisign verifies the signature)
+        run: |
+          UV_TOOL_DIR="$RUNNER_TEMP/installed" UV_TOOL_BIN_DIR="$RUNNER_TEMP/installed/bin" \
+            sh "$SYSTEM_ONE_ROUTER_DOWNLOAD_BASE/install.sh"
+          test "$("$RUNNER_TEMP/installed/bin/s1r" version)" = "$RELEASE_VERSION"
+      - name: Update with the new s1r (its embedded key verifies the signature)
+        run: |
+          UV_TOOL_DIR="$RUNNER_TEMP/updated" UV_TOOL_BIN_DIR="$RUNNER_TEMP/updated/bin" \
+            "$RUNNER_TEMP/installed/bin/s1r" update
+          test "$("$RUNNER_TEMP/updated/bin/s1r" version)" = "$RELEASE_VERSION"
+      - name: Update from the previous published release
+        run: |
+          previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+          if [ -z "$previous" ]; then
+            echo "No published release to update from."
+            exit 0
+          fi
+          gh release download "$previous" --dir "$RUNNER_TEMP/previous" --pattern 's1r-*.whl'
+          export UV_TOOL_DIR="$RUNNER_TEMP/previous/tools" UV_TOOL_BIN_DIR="$RUNNER_TEMP/previous/bin"
+          uv tool install --quiet --python '>=3.9' "$RUNNER_TEMP"/previous/s1r-*.whl
+          "$UV_TOOL_BIN_DIR/s1r" update "$RELEASE_TAG"
+          test "$("$UV_TOOL_BIN_DIR/s1r" version)" = "$RELEASE_VERSION"
+
+  promote:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

@@ -10,7 +10,7 @@ help:
 	    'make release [BUMP=patch|minor|major]  Tag the next version on main and push it; CI publishes the release'
 
 install: package
-	SYSTEM_ONE_ROUTER_DOWNLOAD_BASE="$(CURDIR)/dist-release" sh install.sh
+	SYSTEM_ONE_ROUTER_LOCAL_BUILD=1 SYSTEM_ONE_ROUTER_DOWNLOAD_BASE="$(CURDIR)/dist-release" sh install.sh
 
 test:
 	python3 -m unittest discover -s tests
