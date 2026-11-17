@@ -46,7 +46,8 @@ on `main` and pushes it. `.github/workflows/release.yml` then runs only for the 
 owner: it tests and smoke-tests the assets, signs `checksums.txt` in the `release`
 environment with the `MINISIGN_SECRET_KEY` secret, uploads a draft release, installs and
 updates from that draft (including from the previous published release), and only then
-publishes it. A published release is never modified.
+publishes it. A published release is never modified. Running the workflow manually only
+builds and tests; to retry a failed release, re-run the tag's workflow run.
 
 ## Configure
 
