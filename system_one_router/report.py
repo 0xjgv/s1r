@@ -19,10 +19,12 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import sys
 from datetime import date, datetime
 
 from system_one_router import route
 
+EFFORT_LABELS = {"low": "medium", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}  # clamped to EFFORTS
 COLUMNS = ("model", "effort", "picks", "applied", "overrode", "done", "bg", "failed", "error",
            "median_ms", "median_tokens")
 
@@ -137,6 +139,58 @@ def table(rows: list[dict]) -> str:
     widths = [max(len(line[i]) for line in cells) for i in range(len(COLUMNS))]
     return "\n".join("  ".join(value.ljust(width) if i < 2 else value.rjust(width)
                                for i, (value, width) in enumerate(zip(line, widths))).rstrip() for line in cells)
+
+
+def labels(explicit: dict) -> dict:
+    """Eval case labels from a caller's explicit model and effort: the tiers whose Claude model it named,
+    first one as tier and the rest as also_tier, and its effort clamped to EFFORTS. Relative efforts
+    (lower, higher) and models outside the tier table give no label."""
+    case = {}
+    tiers = [tier for tier, models in route.MODELS.items() if models["claude"] == explicit.get("model")]
+    if tiers:
+        case.update(tier=tiers[0], **({"also_tier": tiers[1:]} if tiers[1:] else {}))
+    effort = explicit.get("effort")
+    if isinstance(effort, str) and effort in EFFORT_LABELS:  # the hook keeps any value the caller wrote
+        case["effort"] = EFFORT_LABELS[effort]
+    return case
+
+
+def learn() -> int:
+    """s1r learn: write the log's Agent prompts whose caller set a model or effort to learned_cases.jsonl
+    beside the log, as private eval cases labeled by the caller (split "learned", the router's logged pick
+    in picked), and print how often the pick agreed with the caller, listing each disagreement by case id.
+    Rewrites the file on every run."""
+    cases, skipped, compared, disagreements = [], 0, {"tier": 0, "effort": 0}, []
+    for record in read():
+        explicit = record.get("explicit")
+        if record.get("kind") != "agent" or not isinstance(explicit, dict) or not explicit:
+            continue
+        case = labels(explicit)
+        if not case or not record.get("text"):
+            skipped += 1
+            continue
+        picked = {key: record[key] for key in ("tier", "effort") if record.get(key) and "error" not in record}
+        case_id = record.get("tool_use_id") or record.get("ts")
+        accepts = {"tier": [case.get("tier"), *case.get("also_tier", [])], "effort": [case.get("effort")]}
+        for key, accepted in accepts.items():
+            if case.get(key) and picked.get(key):
+                compared[key] += 1
+                if picked[key] not in accepted:
+                    disagreements.append(f"  {case_id}: picked {key} {picked[key]}, caller wrote {explicit}")
+        cases.append({"id": case_id, "ts": record.get("ts"), "text": record["text"], **case,
+                      "split": "learned", "picked": picked, "explicit": explicit})
+    path = route.LOG.with_name("learned_cases.jsonl")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(case) + "\n" for case in cases))
+    except OSError as err:
+        print(f"s1r learn: cannot write {path}: {err}", file=sys.stderr)
+        return 1
+    print(f"{len(cases)} cases -> {path}")
+    print(f"compared with the logged pick: tier {compared['tier']}, effort {compared['effort']}; "
+          f"{len(disagreements)} disagreed" + (":" if disagreements else ""))
+    print("\n".join(disagreements + [f"skipped {skipped}: relative effort or a model outside the tier table"]))
+    return 0
 
 
 def main(argv: list[str]) -> int:

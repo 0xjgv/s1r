@@ -356,6 +356,20 @@ calls that ran as picked (applied, with no caller `model` or `effort`), complete
 counts, the error rate, and median duration and tokens of completed calls. Pass-through records with no pick (a pinned agent, a call that set
 both fields) count under `-`. Older records without the new fields count where they can.
 
+```sh
+s1r learn
+```
+
+`learn` turns callers' choices into labels. For each Agent record whose caller wrote a `model` or
+`effort`, it writes one eval case to `~/.local/state/s1r/learned_cases.jsonl` beside the log, in the
+`evals/cases.jsonl` shape with `split: "learned"`: `sonnet` labels `routine`, `opus` labels
+`judgment` with `hard` in `also_tier`, and an effort labels itself, with `low` read as `medium` and
+`max` as `xhigh`. Relative efforts and models outside the tier table give no label. Each case also
+keeps the router's logged pick (`picked`, empty when scoring failed or the call passed through) and
+the caller's `explicit` fields, and has only the labels the caller gave: often a tier without an
+effort. It prints how many picks it compared with the caller and lists each disagreement by case
+id. The file holds real prompts: it is private, rewritten on every run, and never belongs in `evals/`.
+
 Prompts are sent to the selected scoring service and, on failure, the next ones in the chain. Keep
 credentials and logs out of commits and use synthetic prompts for integration tests.
 
@@ -363,13 +377,13 @@ credentials and logs out of commits and use synthetic prompts for integration te
 
 | File | Purpose |
 |---|---|
-| `system_one_router/cli.py` | The `s1r` command: `route`, `codex`, `hook`, `report`, `status`, `update`, `version` |
+| `system_one_router/cli.py` | The `s1r` command: `route`, `codex`, `hook`, `report`, `learn`, `status`, `update`, `version` |
 | `system_one_router/model_provider.py` | Provider configuration, credentials, API adapters, and fallback |
 | `system_one_router/route.py` | Tier and effort definitions, the tier table, fallbacks, selection, and logs |
 | `system_one_router/agent_hook.py` | Claude Code `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `SubagentStop` JSON interface |
-| `system_one_router/report.py` | Summarize Agent picks and outcomes from the log |
+| `system_one_router/report.py` | Summarize Agent picks and outcomes, and write caller-labeled cases, from the log |
 | `system_one_router/codex_run.py` | Launch a whole Codex task with the selected model and effort |
 | `system_one_router/signature.py` | Standard-library minisign (Ed25519) verification for `s1r update` |
 | `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml` | Packaging, the release installer, and the release pipeline |
-| `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py`, `tests/test_report.py`, `tests/test_release.py` | Offline provider, routing, hook, launcher, report, and release-signature regression tests |
+| `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py`, `tests/test_report.py`, `tests/test_learn.py`, `tests/test_release.py` | Offline provider, routing, hook, launcher, report, learn, and release-signature regression tests |
 | `evals/cases.jsonl`, `evals/test_live_routing.py` | Labeled synthetic routing cases and the live evals that score them |
