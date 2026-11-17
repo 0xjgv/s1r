@@ -4,6 +4,7 @@
     s1r codex <prompt> [codex exec options]   run one routed Codex task
     s1r hook               Claude Code Agent hook: route on PreToolUse, log outcomes on PostToolUse(Failure) and SubagentStop
     s1r report [--since YYYY-MM-DD] [--json]   summarize Agent picks and outcomes from the log
+    s1r learn              write caller-labeled Agent prompts from the log as private eval cases
     s1r status             show settings, their sources, and the provider chain's keys
     s1r update [VERSION]   install the latest release, or VERSION such as v0.2.0
     s1r version            print the installed version
@@ -57,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
         return codex_run.main(rest)
     if command == "report":
         return report.main(rest)
+    if command == "learn" and not rest:
+        return report.learn()
     if command == "hook" and not rest:
         return agent_hook.main()
     if command == "status" and not rest:
