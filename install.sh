@@ -5,9 +5,12 @@
 #                                  checksums.txt and the wheel (local testing)
 # SYSTEM_ONE_ROUTER_HOME           where release wheels are kept (default: $HOME/.local/share/s1r)
 # When an anonymous download fails and the GitHub CLI is logged in, it downloads through `gh`.
+# checksums.txt is verified against PUBLIC_KEY with minisign when it is installed, and always
+# during `s1r update`.
 set -eu
 
 REPO=0xjgv/s1r
+PUBLIC_KEY=RWR2PFc1+r1xmV3gi0dY64O7YzkmqbVs98CYjA8FbON/ljSGOSetZ1Pw
 NAME=s1r
 OLD=system-one-router  # the tool and folder name before v0.1.4
 
@@ -66,11 +69,27 @@ fetch() {
     die "download failed: $release/$1"
 }
 
+verify_signature() {
+    if [ -n "${SYSTEM_ONE_ROUTER_VERIFIER:-}" ]; then
+        fetch checksums.txt.minisig "$tmpdir/checksums.txt.minisig"
+        "$SYSTEM_ONE_ROUTER_VERIFIER" -m system_one_router update --verify-signature "$PUBLIC_KEY" \
+            "$tmpdir/checksums.txt" "$tmpdir/checksums.txt.minisig" ||
+            die "invalid signature for $release/checksums.txt"
+    elif command -v minisign >/dev/null 2>&1; then
+        fetch checksums.txt.minisig "$tmpdir/checksums.txt.minisig"
+        minisign -V -q -P "$PUBLIC_KEY" -m "$tmpdir/checksums.txt" -x "$tmpdir/checksums.txt.minisig" ||
+            die "invalid signature for $release/checksums.txt"
+    else
+        echo "$NAME install: minisign not found; checksums.txt signature not verified" >&2
+    fi
+}
+
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' 0
 trap 'exit 1' HUP INT TERM
 
 fetch checksums.txt "$tmpdir/checksums.txt"
+verify_signature
 wheel=$(awk -v version="$version" '
     {sub(/^\*/, "", $2)}
     $2 ~ /^s1r-[0-9]+[.][0-9]+[.][0-9]+-py3-none-any[.]whl$/ &&
@@ -80,11 +99,22 @@ wheel=$(awk -v version="$version" '
     END {if (count == 1) print found}
 ' "$tmpdir/checksums.txt")
 [ -n "$wheel" ] || die "expected one $NAME wheel in $release/checksums.txt"
+wheel_version=${wheel#s1r-}
+wheel_version=${wheel_version%-py3-none-any.whl}
+
+bin_dir=$(uv tool dir --bin)
+previous=
+if [ -x "$bin_dir/$NAME" ]; then
+    previous=$("$bin_dir/$NAME" version 2>/dev/null || true)
+fi
+if [ "$previous" = "$wheel_version" ]; then
+    echo "$bin_dir/$NAME is already up to date: $previous"
+    exit 0
+fi
+
 expected=$(awk -v name="$wheel" '{sub(/^\*/, "", $2)} $2 == name {print $1}' "$tmpdir/checksums.txt")
 fetch "$wheel" "$tmpdir/$wheel"
 [ "$(sha256 "$tmpdir/$wheel")" = "$expected" ] || die "checksum mismatch for $wheel"
-wheel_version=${wheel#s1r-}
-wheel_version=${wheel_version%-py3-none-any.whl}
 
 # Move config, logs, and kept wheels from the $OLD folders once; never overwrite.
 for root in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_STATE_HOME:-$HOME/.local/state}" "$HOME/.local/share"; do
@@ -97,11 +127,6 @@ store=${SYSTEM_ONE_ROUTER_HOME:-$HOME/.local/share/$NAME}/releases
 mkdir -p "$store"
 cp "$tmpdir/$wheel" "$store/$wheel"
 
-bin_dir=$(uv tool dir --bin)
-previous=
-if [ -x "$bin_dir/$NAME" ]; then
-    previous=$("$bin_dir/$NAME" version 2>/dev/null || true)
-fi
 # The $OLD tool also provides $NAME; remove it first so uv does not keep a stale receipt.
 if uv tool list 2>/dev/null | grep -q "^$OLD "; then
     uv tool uninstall "$OLD" >/dev/null 2>&1 || die "uv tool uninstall $OLD failed"
