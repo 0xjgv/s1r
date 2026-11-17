@@ -4,21 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  # A manual run only builds and tests; signing and publishing need a tag push.
+  # To retry a failed release, re-run the tag's run.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing release tag to (re)build into a draft, e.g. v0.1.0
-        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
   build:
@@ -31,17 +29,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check that the tag is on main and matches pyproject.toml
+      - name: Check the version, and that a release tag is on main and matches it
         id: version
         run: |
-          git merge-base --is-ancestor HEAD origin/main
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
           echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
-          test "$RELEASE_TAG" = "v$version"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            git merge-base --is-ancestor HEAD origin/main
+            test "$RELEASE_TAG" = "v$version"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
@@ -58,7 +57,7 @@ jobs:
         run: |
           export UV_TOOL_DIR="$RUNNER_TEMP/uv-tools" UV_TOOL_BIN_DIR="$RUNNER_TEMP/bin"
           export SYSTEM_ONE_ROUTER_HOME="$RUNNER_TEMP/share" XDG_CONFIG_HOME="$RUNNER_TEMP/config"
-          SYSTEM_ONE_ROUTER_DOWNLOAD_BASE="$PWD/dist-release" SYSTEM_ONE_ROUTER_VERSION="$RELEASE_TAG" sh install.sh
+          SYSTEM_ONE_ROUTER_DOWNLOAD_BASE="$PWD/dist-release" SYSTEM_ONE_ROUTER_VERSION="v$RELEASE_VERSION" sh install.sh
           test "$("$UV_TOOL_BIN_DIR/s1r" version)" = "$RELEASE_VERSION"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -70,6 +69,7 @@ jobs:
 
   draft:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Holds MINISIGN_SECRET_KEY; no other job can read it.
     environment: release
