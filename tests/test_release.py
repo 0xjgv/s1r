@@ -177,6 +177,21 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(current.returncode, 0, current.stderr)
         self.assertIn("already up to date: 0.2.0", current.stdout)
 
+    def test_local_build_installs_unsigned_assets_and_reinstalls_the_same_version(self):
+        self.publish("0.1.0")
+        self.assertEqual(self.install().returncode, 0)
+        (self.release / "checksums.txt.minisig").unlink()
+        local = {"SYSTEM_ONE_ROUTER_LOCAL_BUILD": "1"}
+        for overrides in ({}, {"SYSTEM_ONE_ROUTER_VERIFIER": str(self.verifier)}):
+            with self.subTest(verifier=bool(overrides)):
+                result = self.install(**local, **overrides)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("signature not checked", result.stderr)
+                self.assertNotIn("already up to date", result.stdout)
+        remote = self.install(**local, SYSTEM_ONE_ROUTER_DOWNLOAD_BASE="https://example.invalid/releases")
+        self.assertNotEqual(remote.returncode, 0)
+        self.assertIn("needs SYSTEM_ONE_ROUTER_DOWNLOAD_BASE to be a local directory", remote.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

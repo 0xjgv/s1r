@@ -39,7 +39,9 @@ published before signing cannot be installed this way, and it skips the download
 that release is already installed. To uninstall, run `uv tool uninstall s1r`.
 
 From a source checkout, `make install` builds the wheel, packages it as a release does,
-and installs that package. `make release [BUMP=patch|minor|major]` tags the next version
+and installs that package. It sets `SYSTEM_ONE_ROUTER_LOCAL_BUILD=1`, so the installer skips
+the signature check and reinstalls even when that version is already installed; it accepts
+only a local directory as the download base. `make release [BUMP=patch|minor|major]` tags the next version
 on `main` and pushes it. `.github/workflows/release.yml` then runs only for the repository
 owner: it tests and smoke-tests the assets, signs `checksums.txt` in the `release`
 environment with the `MINISIGN_SECRET_KEY` secret, uploads a draft release, installs and
