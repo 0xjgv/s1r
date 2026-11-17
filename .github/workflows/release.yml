@@ -76,17 +76,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # This job needs only the minisign installer from the repository.
+          sparse-checkout: scripts/install-minisign.sh
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: s1r-release
           path: dist-release
+      - name: Install minisign
+        run: |
+          scripts/install-minisign.sh "$RUNNER_TEMP/minisign"
+          echo "$RUNNER_TEMP/minisign" >> "$GITHUB_PATH"
       - name: Sign checksums.txt
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
         run: |
           test -n "$MINISIGN_SECRET_KEY" || { echo "MINISIGN_SECRET_KEY is not set in the release environment" >&2; exit 1; }
-          sudo apt-get update -q
-          sudo apt-get install -y -q minisign
           key="$RUNNER_TEMP/minisign.key"
           (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
           minisign -S -s "$key" -m dist-release/checksums.txt -t "s1r $RELEASE_TAG"
@@ -123,11 +131,17 @@ jobs:
       SYSTEM_ONE_ROUTER_HOME: ${{ github.workspace }}/share
       XDG_CONFIG_HOME: ${{ github.workspace }}/config
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # This job needs only the minisign installer from the repository.
+          sparse-checkout: scripts/install-minisign.sh
+          sparse-checkout-cone-mode: false
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
       - name: Install minisign
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q minisign
+          scripts/install-minisign.sh "$RUNNER_TEMP/minisign"
+          echo "$RUNNER_TEMP/minisign" >> "$GITHUB_PATH"
       - name: Download the draft release
         run: |
           gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/draft"
