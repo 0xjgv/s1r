@@ -15,38 +15,30 @@ Routing log: ~/.local/state/s1r/beta_log.jsonl.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
-import urllib.request
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from system_one_router import agent_hook, codex_run, model_provider, report, route
-
-RELEASES = "https://github.com/0xjgv/s1r/releases"
+from system_one_router import agent_hook, codex_run, model_provider, report, route, signature
 
 
 def update(target: str) -> int:
-    """Fetch the release's install.sh and run it; it verifies and installs the wheel.
-    SYSTEM_ONE_ROUTER_DOWNLOAD_BASE may name another release URL or a local directory, as for install.sh."""
-    base = os.environ.get("SYSTEM_ONE_ROUTER_DOWNLOAD_BASE", RELEASES).rstrip("/")
-    tag = "v" + target.lstrip("v") if target else ""
-    with tempfile.TemporaryDirectory() as directory:
-        script = Path(directory) / "install.sh"
-        try:
-            if base.startswith("/"):
-                shutil.copyfile(Path(base) / "install.sh", script)
-            else:
-                url = f"{base}/download/{tag}/install.sh" if tag else f"{base}/latest/download/install.sh"
-                with urllib.request.urlopen(url, timeout=30) as response:
-                    script.write_bytes(response.read())
-        except OSError as err:
-            print(f"s1r update: cannot fetch install.sh from {base}: {err}", file=sys.stderr)
-            return 1
-        environment = {**os.environ, "SYSTEM_ONE_ROUTER_VERSION": tag} if tag else None
-        return subprocess.run(["sh", str(script)], env=environment).returncode
+    """Run the installer bundled with this version. It verifies the release's signature by
+    calling back `update --verify-signature` with this interpreter, then installs the wheel."""
+    environment = {**os.environ, "SYSTEM_ONE_ROUTER_VERIFIER": sys.executable}
+    if target:
+        environment["SYSTEM_ONE_ROUTER_VERSION"] = "v" + target.lstrip("v")
+    return subprocess.run(["sh", str(Path(__file__).with_name("install.sh"))], env=environment).returncode
+
+
+def verify_signature(public_key: str, message: str, signature_file: str) -> int:
+    try:
+        signature.verify(public_key, Path(message).read_bytes(), Path(signature_file).read_text())
+    except (OSError, ValueError) as err:
+        print(f"s1r update: {signature_file}: {err}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,7 +53,9 @@ def main(argv: list[str] | None = None) -> int:
         return agent_hook.main()
     if command == "status" and not rest:
         return model_provider.status()
-    if command == "update" and len(rest) <= 1:
+    if command == "update" and len(rest) == 4 and rest[0] == "--verify-signature":
+        return verify_signature(*rest[1:])
+    if command == "update" and len(rest) <= 1 and rest[:1] != ["--verify-signature"]:
         return update(rest[0] if rest else "")
     if command == "version" and not rest:
         try:

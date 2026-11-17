@@ -17,22 +17,34 @@ The installer needs [uv](https://docs.astral.sh/uv/) and a POSIX shell (macOS, L
 Install or update the latest release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xjgv/s1r/main/install.sh | sh
+curl -fsSL https://github.com/0xjgv/s1r/releases/latest/download/install.sh | sh
 ```
 
 It downloads `s1r-<version>-py3-none-any.whl` and `checksums.txt` from
 [GitHub Releases](https://github.com/0xjgv/s1r/releases), verifies the
 wheel's SHA-256, keeps it under `~/.local/share/s1r/releases`, and installs
-it with `uv tool install`. The `s1r` command lands in uv's tool bin directory
+it with `uv tool install`. When [minisign](https://jedisct1.github.io/minisign/) is
+installed, it first verifies the signature `checksums.txt.minisig` against this public key:
+
+```text
+RWR2PFc1+r1xmV3gi0dY64O7YzkmqbVs98CYjA8FbON/ljSGOSetZ1Pw
+```
+
+The `s1r` command lands in uv's tool bin directory
 (`uv tool dir --bin`, usually `~/.local/bin`); put that directory on your `PATH`. Set
-`SYSTEM_ONE_ROUTER_VERSION=v0.1.2` to pin a release. Once installed, `s1r update` runs the
-latest release's installer, and `s1r update v0.1.2` installs that release. To uninstall, run
-`uv tool uninstall s1r`.
+`SYSTEM_ONE_ROUTER_VERSION=vX.Y.Z` to pin a release. Once installed, `s1r update` runs the
+installer bundled with the installed version, and `s1r update vX.Y.Z` installs that release.
+It always verifies the signature with the key embedded in that installer, so releases
+published before signing cannot be installed this way, and it skips the download when
+that release is already installed. To uninstall, run `uv tool uninstall s1r`.
 
 From a source checkout, `make install` builds the wheel, packages it as a release does,
 and installs that package. `make release [BUMP=patch|minor|major]` tags the next version
-on `main` and pushes it; `.github/workflows/release.yml` tests, smoke-tests the installer,
-and publishes the assets.
+on `main` and pushes it. `.github/workflows/release.yml` then runs only for the repository
+owner: it tests and smoke-tests the assets, signs `checksums.txt` in the `release`
+environment with the `MINISIGN_SECRET_KEY` secret, uploads a draft release, installs and
+updates from that draft (including from the previous published release), and only then
+publishes it. A published release is never modified.
 
 ## Configure
 
@@ -354,6 +366,7 @@ credentials and logs out of commits and use synthetic prompts for integration te
 | `system_one_router/agent_hook.py` | Claude Code `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `SubagentStop` JSON interface |
 | `system_one_router/report.py` | Summarize Agent picks and outcomes from the log |
 | `system_one_router/codex_run.py` | Launch a whole Codex task with the selected model and effort |
+| `system_one_router/signature.py` | Standard-library minisign (Ed25519) verification for `s1r update` |
 | `pyproject.toml`, `install.sh`, `Makefile`, `scripts/`, `.github/workflows/release.yml` | Packaging, the release installer, and the release pipeline |
-| `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py`, `tests/test_report.py` | Offline provider, routing, hook, launcher, and report regression tests |
+| `tests/test_model_provider.py`, `tests/test_route.py`, `tests/test_codex.py`, `tests/test_report.py`, `tests/test_release.py` | Offline provider, routing, hook, launcher, report, and release-signature regression tests |
 | `evals/cases.jsonl`, `evals/test_live_routing.py` | Labeled synthetic routing cases and the live evals that score them |
