@@ -4,6 +4,9 @@
 # SYSTEM_ONE_ROUTER_DOWNLOAD_BASE  release base URL, or an absolute directory holding
 #                                  checksums.txt and the wheel (local testing)
 # SYSTEM_ONE_ROUTER_HOME           where release wheels are kept (default: $HOME/.local/share/s1r)
+# SYSTEM_ONE_ROUTER_LOCAL_BUILD=1  install unsigned assets you built in the local
+#                                  DOWNLOAD_BASE directory (`make install`), even when
+#                                  that version is already installed
 # When an anonymous download fails and the GitHub CLI is logged in, it downloads through `gh`.
 # checksums.txt is verified against PUBLIC_KEY with minisign when it is installed, and always
 # during `s1r update`.
@@ -50,6 +53,13 @@ fi
 
 base=${SYSTEM_ONE_ROUTER_DOWNLOAD_BASE:-https://github.com/$REPO/releases}
 base=${base%/}
+local_build=${SYSTEM_ONE_ROUTER_LOCAL_BUILD:-}
+if [ -n "$local_build" ]; then
+    case $base in
+    /*) ;;
+    *) die "SYSTEM_ONE_ROUTER_LOCAL_BUILD needs SYSTEM_ONE_ROUTER_DOWNLOAD_BASE to be a local directory" ;;
+    esac
+fi
 case $base in
 /*) release=$base ;;
 *) if [ -n "$version" ]; then release=$base/download/v$version; else release=$base/latest/download; fi ;;
@@ -70,6 +80,10 @@ fetch() {
 }
 
 verify_signature() {
+    if [ -n "$local_build" ]; then
+        echo "$NAME install: local build from $release; signature not checked" >&2
+        return
+    fi
     if [ -n "${SYSTEM_ONE_ROUTER_VERIFIER:-}" ]; then
         fetch checksums.txt.minisig "$tmpdir/checksums.txt.minisig"
         "$SYSTEM_ONE_ROUTER_VERIFIER" -m system_one_router update --verify-signature "$PUBLIC_KEY" \
@@ -107,7 +121,7 @@ previous=
 if [ -x "$bin_dir/$NAME" ]; then
     previous=$("$bin_dir/$NAME" version 2>/dev/null || true)
 fi
-if [ "$previous" = "$wheel_version" ]; then
+if [ -z "$local_build" ] && [ "$previous" = "$wheel_version" ]; then
     echo "$bin_dir/$NAME is already up to date: $previous"
     exit 0
 fi
